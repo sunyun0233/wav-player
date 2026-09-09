@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Resonance Archive — 本地 Whisper 转写/翻译桥接脚本
+WAV Player — 本地 Whisper 转写/翻译桥接脚本
 
 子命令:
   env        输出环境探测结果 (单行 JSON)
@@ -285,7 +285,7 @@ def write_subtitle(
                 text = (seg["text"] or "").strip()
                 fh.write(f"{i}\n{start} --> {end}\n{text}\n\n")
         else:
-            fh.write("WEBVTT\n\ntranslated by Resonance Archive (faster-whisper)\n\n")
+            fh.write("WEBVTT\n\ntranslated by WAV Player (faster-whisper)\n\n")
             for seg in segments:
                 start = _format_ts(seg["start"])
                 end = _format_ts(seg["end"])
@@ -438,7 +438,7 @@ def transcribe(config: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="resonance-transcribe")
+    parser = argparse.ArgumentParser(prog="wav-player-transcribe")
     parser.add_argument("command", choices=["env", "download", "transcribe"])
     parser.add_argument("--config", default=None)
     parser.add_argument("--repo-id", default=None)

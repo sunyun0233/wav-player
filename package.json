@@ -1,17 +1,17 @@
 {
-  "name": "resonance-archive",
+  "name": "wav-player",
   "version": "1.0.0",
-  "description": "WAV 播放器 + VTT 字幕 (exa-archival UI)",
+  "description": "一个简单易用的 WAV 播放器，支持同步字幕与本地日文转中文。",
   "main": "main.js",
   "author": "local",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sunyun0233/resonance-archive.git"
+    "url": "https://github.com/sunyun0233/wav-player.git"
   },
-  "homepage": "https://github.com/sunyun0233/resonance-archive",
+  "homepage": "https://github.com/sunyun0233/wav-player",
   "bugs": {
-    "url": "https://github.com/sunyun0233/resonance-archive/issues"
+    "url": "https://github.com/sunyun0233/wav-player/issues"
   },
   "keywords": [
     "electron",
@@ -35,8 +35,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.local.resonance",
-    "productName": "Resonance Archive",
+    "appId": "com.local.wavplayer",
+    "productName": "WAV Player",
     "compression": "normal",
     "directories": {
       "output": "dist"
@@ -66,7 +66,7 @@
       "signAndEditExecutable": false
     },
     "portable": {
-      "artifactName": "ResonanceArchive-${version}-portable.exe"
+      "artifactName": "WavPlayer-${version}-portable.exe"
     }
   },
   "allowScripts": {

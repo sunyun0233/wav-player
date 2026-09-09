@@ -90,7 +90,7 @@ function createWindow() {
     backgroundColor: '#080914',
     show: false,
     autoHideMenuBar: true,
-    title: 'Resonance Archive',
+    title: 'WAV 播放器',
     icon: path.join(__dirname, 'renderer', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

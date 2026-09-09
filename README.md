@@ -1,8 +1,8 @@
-# Resonance Archive
+# WAV 播放器（WAV Player）
 
-**A local WAV player with synchronized VTT subtitles and Japanese → Chinese transcription.**
+**一个本地 WAV 播放器：同步 VTT 字幕，并支持日文 → 中文转写。**
 
-`Resonance Archive` 是一个基于 Electron 的桌面播放器，用于播放本地 `.wav` 音频、同步显示 `.vtt` 字幕，并可将日语 ASMR 音频在 **本地** 转写为中文字幕。界面采用 ark-ui 的 **Ex Astris（exa）** 家族、`complex` 深度视觉（午夜蓝黑 / 纸白 / 青绿，衬线对比 + 环形仪器）。
+`WAV Player` 是一个基于 Electron 的桌面播放器，用于播放本地 `.wav` 音频、同步显示 `.vtt` 字幕，并可将日语 ASMR 音频在 **本地** 转写为中文字幕。界面采用 ark-ui 的 **Ex Astris（exa）** 家族、`complex` 深度视觉（午夜蓝黑 / 纸白 / 青绿，衬线对比 + 环形仪器）。
 
 <p>
   <img alt="Electron" src="https://img.shields.io/badge/Electron-33-blue?logo=electron&logoColor=white" />
@@ -145,14 +145,14 @@ py -3.11 -m pip install nvidia-cudnn-cu12 nvidia-cublas-cu12
 ## 打包 / Packaging
 
 ```bash
-npm run pack          # 生成解包版: dist\win-unpacked\Resonance Archive.exe
+npm run pack          # 生成解包版: dist\win-unpacked\WAV Player.exe
 npm run pack:portable # (可选) 便携版
 ```
 
 > `win.signAndEditExecutable` 已设为 `false`，因此 `electron-builder` 不会自动嵌入图标；如需给解包版 exe 加图标，可在本机安装 [rcedit](https://github.com/electron/rcedit) 后执行：
 >
 > ```bash
-> rcedit-x64.exe "dist\win-unpacked\Resonance Archive.exe" --set-icon "dist\.icon-ico\icon.ico" --set-version-string "ProductName" "Resonance Archive"
+> rcedit-x64.exe "dist\win-unpacked\WAV Player.exe" --set-icon "dist\.icon-ico\icon.ico" --set-version-string "ProductName" "WAV Player"
 > ```
 >
 > 不要对便携版 exe 使用 `rcedit`（NSIS 便携 stub 会剥离内嵌数据）。

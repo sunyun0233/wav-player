@@ -240,7 +240,7 @@ app.whenReady().then(async () => {
     const fakeVtt = path.join(__dirname, '..', 'samples', 'zh', '01.和我分手后悔了？.wav.zh.vtt');
     fs.writeFileSync(
       fakeVtt,
-      'WEBVTT\n\ntranslated by Resonance Archive\n\n00:00:00.000 --> 00:00:03.000\n这是我离开之后的第一天。\n\n00:00:03.000 --> 00:00:06.200\n你不要再等了。\n',
+      'WEBVTT\n\ntranslated by WAV Player\n\n00:00:00.000 --> 00:00:03.000\n这是我离开之后的第一天。\n\n00:00:03.000 --> 00:00:06.200\n你不要再等了。\n',
       'utf8'
     );
     await js(

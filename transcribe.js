@@ -17,7 +17,7 @@ const DEFAULT_MODEL_DIR = path.join(
   os.homedir(),
   'AppData',
   'Roaming',
-  'resonance-archive',
+  'wav-player',
   'models',
   DEFAULT_REPO.split('/')[1]
 );
