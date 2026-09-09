@@ -2,7 +2,7 @@
 
 **一个本地 WAV 播放器：同步 VTT 字幕，并支持日文 → 中文转写。**
 
-`WAV Player` 是一个基于 Electron 的桌面播放器，用于播放本地 `.wav` 音频、同步显示 `.vtt` 字幕，并可将日语 ASMR 音频在 **本地** 转写为中文字幕。界面采用 ark-ui 的 **Ex Astris（exa）** 家族、`complex` 深度视觉（午夜蓝黑 / 纸白 / 青绿，衬线对比 + 环形仪器）。
+`WAV Player` 是一个基于 Electron 的桌面播放器，用于播放本地 `.wav` 音频、同步显示 `.vtt` 字幕，并可将日语 ASMR 音频在 **本地** 转写为中文字幕。
 
 <p>
   <img alt="Electron" src="https://img.shields.io/badge/Electron-33-blue?logo=electron&logoColor=white" />
@@ -178,8 +178,3 @@ npm run pack:portable # (可选) 便携版
 
 [MIT](./LICENSE)
 
-## 致谢 / Acknowledgements
-
-- 转写方案参考 [TransWithAI/Faster-Whisper-TransWithAI-ChickenRice](https://github.com/TransWithAI/Faster-Whisper-TransWithAI-ChickenRice)（MIT）。
-- 日→中模型来自 [chickenrice0721/whisper-large-v2-translate-zh-v0.2-st-ct2](https://huggingface.co/chickenrice0721/whisper-large-v2-translate-zh-v0.2-st-ct2)。
-- 视觉语言研究参考 ark-ui / Ex Astris 公开调性（代码为原创实现，不含受保护素材）。
