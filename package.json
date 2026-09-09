@@ -5,6 +5,26 @@
   "main": "main.js",
   "author": "local",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sunyun0233/resonance-archive.git"
+  },
+  "homepage": "https://github.com/sunyun0233/resonance-archive",
+  "bugs": {
+    "url": "https://github.com/sunyun0233/resonance-archive/issues"
+  },
+  "keywords": [
+    "electron",
+    "wav",
+    "player",
+    "vtt",
+    "subtitle",
+    "faster-whisper",
+    "whisper",
+    "japanese-to-chinese",
+    "ark-ui",
+    "exa"
+  ],
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --win dir",
