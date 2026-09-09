@@ -76,9 +76,9 @@ npm run pack:portable  # 打包便携 EXE (可选)
 ```
 
 > 打包时需关闭 Windows 对可执行文件资源编辑的依赖（沙箱无法创建符号链接）。
-> `package.json` 中 `win.signAndEditExecutable` 已设为 `false`，打包完成后建议用
-> `test\tmp-wincodesign\rcedit-x64.exe` 为解包版 exe（`dist\win-unpacked\Resonance Archive.exe`）
-> 重新嵌入图标：`rcedit-x64.exe "dist\win-unpacked\Resonance Archive.exe" --set-icon "dist\.icon-ico\icon.ico" --set-version-string "ProductName" "Resonance Archive"`。
+> `package.json` 中 `win.signAndEditExecutable` 已设为 `false`，因此 `electron-builder` 不会自动嵌入图标；
+> 如需给解包版 exe 加图标，可在本机安装 [rcedit](https://github.com/electron/rcedit) 后执行：
+> `rcedit-x64.exe "dist\win-unpacked\Resonance Archive.exe" --set-icon "dist\.icon-ico\icon.ico" --set-version-string "ProductName" "Resonance Archive"`。
 > **注意**：不要用 `rcedit` 处理便携版 exe——NSIS 便携 stub 会将内嵌数据剥离，导致文件被截断。
 > 便携版运行时任务栏会显示窗口图标（已在 `main.js` 中设置）。
 
