@@ -1,0 +1,55 @@
+{
+  "name": "resonance-archive",
+  "version": "1.0.0",
+  "description": "WAV 播放器 + VTT 字幕 (exa-archival UI)",
+  "main": "main.js",
+  "author": "local",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --win dir",
+    "pack:portable": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.local.resonance",
+    "productName": "Resonance Archive",
+    "compression": "normal",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "library.js",
+      "transcribe.js",
+      "transcribe.py",
+      "renderer/**"
+    ],
+    "asarUnpack": [
+      "transcribe.py",
+      "transcribe.js"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "ResonanceArchive-${version}-portable.exe"
+    }
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
