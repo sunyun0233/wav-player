@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
     <title>WAV 播放器</title>
-    <link rel="stylesheet" href="styles.css?v=4" />
-    <script src="vtt.js?v=4" defer></script>
-    <script src="app.js?v=4" defer></script>
+    <link rel="stylesheet" href="styles.css?v=5" />
+    <script src="vtt.js?v=5" defer></script>
+    <script src="app.js?v=5" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#stage-main">跳转到主体</a>
@@ -64,6 +64,9 @@
         </button>
         <button class="rail-item" type="button" data-view="record">
           <span class="rail-index">04</span><span>记录</span>
+        </button>
+        <button class="rail-item" type="button" data-view="albums">
+          <span class="rail-index">05</span><span>专辑</span>
         </button>
         <p class="rail-note" aria-hidden="true">DREAM<br />01<br />A-03</p>
       </nav>
@@ -200,6 +203,17 @@
             </div>
           </section>
 
+          <section class="archive-panel" id="panelAlbums" data-panel="albums" hidden>
+            <header class="panel-head">
+              <span class="panel-code">ALBUMS / 专辑</span>
+              <strong>专辑库</strong>
+              <button class="panel-action" type="button" id="addAlbumBtn">＋ 添加</button>
+            </header>
+            <div class="album-list" id="albumList" role="list">
+              <p class="album-empty" id="albumEmpty">还没有专辑。载入文件夹或点“添加”。</p>
+            </div>
+          </section>
+
           <section class="archive-panel" id="panelRecord" data-panel="record" hidden>
             <header class="panel-head">
               <span class="panel-code">RECORD / 记录</span>
@@ -228,6 +242,14 @@
 
         <div class="modal-body">
           <div class="modal-field">
+            <label>范围</label>
+            <div class="seg" id="transcribeScope" role="radiogroup" aria-label="转写范围">
+              <button type="button" class="seg-btn is-on" data-scope="current" role="radio" aria-checked="true">当前曲目</button>
+              <button type="button" class="seg-btn" data-scope="folder" role="radio" aria-checked="false">整个文件夹</button>
+            </div>
+          </div>
+
+          <div class="modal-field">
             <label for="transcribeModel">模型</label>
             <div class="model-row">
               <select id="transcribeModel">
@@ -239,24 +261,37 @@
             <p class="modal-hint" id="transcribeModelHint">将下载 chickenrice0721 的日→中优化模型。</p>
           </div>
 
-          <div class="modal-field">
-            <label for="transcribeDevice">设备</label>
-            <select id="transcribeDevice">
-              <option value="auto">自动 (优先显卡)</option>
-              <option value="cuda">GPU (CUDA)</option>
-              <option value="cpu">CPU</option>
-            </select>
+          <div class="modal-grid">
+            <div class="modal-field">
+              <label for="transcribeDevice">设备</label>
+              <select id="transcribeDevice">
+                <option value="auto">自动</option>
+                <option value="cuda">GPU</option>
+                <option value="cpu">CPU</option>
+              </select>
+            </div>
+            <div class="modal-field">
+              <label for="transcribeCompute">精度</label>
+              <select id="transcribeCompute">
+                <option value="auto">自动</option>
+                <option value="int8_float16">int8_float16</option>
+                <option value="float16">float16</option>
+                <option value="int8">int8</option>
+                <option value="float32">float32</option>
+              </select>
+            </div>
+            <div class="modal-field">
+              <label for="transcribeFormat">格式</label>
+              <select id="transcribeFormat">
+                <option value="vtt">VTT</option>
+                <option value="srt">SRT</option>
+              </select>
+            </div>
           </div>
 
-          <div class="modal-field">
-            <label for="transcribeCompute">精度</label>
-            <select id="transcribeCompute">
-              <option value="auto">自动</option>
-              <option value="int8_float16">int8_float16（低显存）</option>
-              <option value="float16">float16（高精度）</option>
-              <option value="int8">int8（CPU）</option>
-              <option value="float32">float32</option>
-            </select>
+          <div class="modal-opts">
+            <label class="chk"><input type="checkbox" id="transcribeVad" /> 人声检测（静音 ASMR 更准）</label>
+            <label class="chk"><input type="checkbox" id="transcribeSkip" checked /> 跳过已有中文字幕</label>
           </div>
 
           <div class="env-note" id="transcribeEnvNote" hidden></div>
@@ -267,9 +302,15 @@
             <span class="transcribe-pct" id="transcribePct">0%</span>
           </div>
           <p class="transcribe-segment" id="transcribeSegment" hidden></p>
+
+          <div class="tq" id="transcribeQueue" hidden>
+            <div class="tq-head"><span>队列</span><span id="transcribeQueueStat">0 / 0</span></div>
+            <div class="tq-list" id="transcribeQueueList" role="list"></div>
+          </div>
         </div>
 
         <footer class="modal-foot">
+          <span class="modal-foot-note" id="transcribeScopeNote"></span>
           <button class="action action-primary" id="transcribeStart" type="button">开始转译</button>
           <button class="action action-ghost" id="transcribeCancel" type="button" hidden>取消</button>
         </footer>

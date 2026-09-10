@@ -41,6 +41,15 @@ ipcMain.handle('cover:find', async (_event, audioPath) => {
 });
 ipcMain.handle('cover:saveCustom', async () => true);
 ipcMain.handle('cover:clearCustom', async () => true);
+ipcMain.handle('cover:setFolder', async () => true);
+ipcMain.handle('cover:clearFolder', async () => true);
+ipcMain.handle('cover:folderCover', async (_e, folderPath) => {
+  if (!folderPath || !fs.existsSync(folderPath)) return null;
+  const auto = library.findFolderCover(folderPath);
+  if (!auto) return null;
+  allowedPaths.add(auto);
+  return { kind: 'auto', path: auto, url: mediaUrl(auto) };
+});
 
 ipcMain.handle('dialog:openFolder', async () => null);
 ipcMain.handle('library:scan', async (_e, folderPath) => {
@@ -63,7 +72,15 @@ ipcMain.handle('library:scan', async (_e, folderPath) => {
       coverUrl: t.coverPath ? mediaUrl(t.coverPath) : '',
     };
   });
-  return { folderPath, name: path.basename(folderPath), tracks };
+  const folderCover = library.findFolderCover(folderPath) || '';
+  if (folderCover) allowedPaths.add(folderCover);
+  return {
+    folderPath,
+    name: path.basename(folderPath),
+    folderCover,
+    folderCoverUrl: folderCover ? mediaUrl(folderCover) : '',
+    tracks,
+  };
 });
 ipcMain.handle('subtitle:find', async (_e, audioPath) => {
   if (!audioPath) return null;
@@ -257,6 +274,59 @@ app.whenReady().then(async () => {
   }
   await shot('qa-transcribe-done.png');
 
+  // albums view
+  try {
+    await js('window.__qa.transcribe.close()');
+    await js("window.__qa.setView('albums')");
+    await new Promise((r) => setTimeout(r, 700));
+  } catch (error) {
+    console.error('albums error:', error);
+  }
+  await shot('qa-albums.png');
+
+  // batch transcribe over the folder, simulated
+  try {
+    await js(
+      `(async () => {
+        await window.__qa.loadFolderPath(${JSON.stringify(albumPath)});
+        await new Promise((r) => setTimeout(r, 1400));
+        window.__qa.setView('player');
+        window.__qa.transcribe.open();
+        window.__qa.transcribe.setScope('folder');
+        window.__qa.transcribe.setEnv({ ok: true, cuda_devices: 1, version: '3.11.9', faster_whisper: '1.0.3', missing: [] });
+        await window.__qa.transcribe.start();
+        const q = window.__qa.transcribe.queue();
+        window.__qa.transcribe.event({ jobId: 'qa-job', type: 'batch', total: q.length });
+        window.__qa.transcribe.event({ jobId: 'qa-job', type: 'file', index: 0, total: q.length, name: q[0].name, skipped: false });
+        window.__qa.transcribe.event({ jobId: 'qa-job', type: 'progress', index: 0, percent: 55, completed: 5, total: 9 });
+        window.__qa.transcribe.event({ jobId: 'qa-job', type: 'segment', index: 0, text: '第一段翻译结果。' });
+        return true;
+      })()`
+    );
+    await new Promise((r) => setTimeout(r, 500));
+  } catch (error) {
+    console.error('batch transcribe error:', error);
+  }
+  await shot('qa-transcribe-batch.png');
+
+  try {
+    await js(
+      `(async () => {
+        const q = window.__qa.transcribe.queue();
+        for (let i = 0; i < q.length; i++) {
+          window.__qa.transcribe.event({ jobId: 'qa-job', type: 'file', index: i, total: q.length, name: q[i].name, skipped: false });
+          window.__qa.transcribe.event({ jobId: 'qa-job', type: 'file_done', index: i, output: q[i].path + '.zh.vtt', count: 3, elapsed: 1.1, skipped: false });
+        }
+        window.__qa.transcribe.event({ jobId: 'qa-job', type: 'done', total: q.length, ok: q.length, failed: 0, skipped: 0, outputs: [], elapsed: 5.5 });
+        return true;
+      })()`
+    );
+    await new Promise((r) => setTimeout(r, 500));
+  } catch (error) {
+    console.error('batch done error:', error);
+  }
+  await shot('qa-transcribe-batch-done.png');
+
   try {
     await js('window.__qa.setView("record")');
     const info = await js(
@@ -273,6 +343,32 @@ app.whenReady().then(async () => {
   } catch (_e) {}
   await new Promise((r) => setTimeout(r, 600));
   await shot('qa-portrait.png');
+
+  // session restore check: save -> reload -> expect restored folder/track/position
+  try {
+    win.setBounds({ width: 1280, height: 860 });
+    const samplesRoot = path.resolve(__dirname, '..', 'samples');
+    await js(
+      `(async () => {
+        await window.__qa.loadFolderPath(${JSON.stringify(samplesRoot)});
+        await new Promise((r) => setTimeout(r, 1600));
+        const idx = window.__qa.state.playlist.findIndex((t) => /sample\\.wav$/i.test(t.path));
+        window.__qa.playTrack(idx >= 0 ? idx : 0);
+        await new Promise((r) => setTimeout(r, 900));
+        window.__qa.state.audio.currentTime = 6;
+        window.__qa.session.save();
+        return true;
+      })()`
+    );
+    win.webContents.reload();
+    await new Promise((r) => setTimeout(r, 3500));
+    const restored = await js(
+      '({ folder: window.__qa.state.folderPath, index: window.__qa.state.currentIndex, name: window.__qa.state.audioName, t: Number((window.__qa.state.audio.currentTime||0).toFixed(2)), albums: window.__qa.albums.list().length, pos: Object.keys(window.__qa.session.positions()).length })'
+    );
+    console.log('session restored', JSON.stringify(restored));
+  } catch (error) {
+    console.error('session test error:', error);
+  }
 
   app.quit();
 });

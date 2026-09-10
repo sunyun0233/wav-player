@@ -9,9 +9,11 @@ const {
 } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const library = require('./library');
 const transcribe = require('./transcribe');
+const embeddedCover = require('./embedded-cover');
 
 // Allow the renderer to fetch local media via a custom scheme.
 protocol.registerSchemesAsPrivileged([
@@ -78,6 +80,55 @@ function writeCoverStore(store) {
     fs.writeFileSync(coverStorePath(), JSON.stringify(store));
   } catch (_error) {
     /* ignore write failures */
+  }
+}
+
+function folderCoverStorePath() {
+  return path.join(app.getPath('userData'), 'folder-cover-map.json');
+}
+
+function readFolderCoverStore() {
+  try {
+    return JSON.parse(fs.readFileSync(folderCoverStorePath(), 'utf8')) || {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function writeFolderCoverStore(store) {
+  try {
+    fs.writeFileSync(folderCoverStorePath(), JSON.stringify(store));
+  } catch (_error) {
+    /* ignore write failures */
+  }
+}
+
+function folderCoverOverride(folderPath) {
+  if (typeof folderPath !== 'string' || !folderPath) return '';
+  const store = readFolderCoverStore();
+  const hit = store[folderPath];
+  return hit && fs.existsSync(hit) ? hit : '';
+}
+
+// 提取音频内嵌封面并落盘缓存, 返回缓存文件路径 (内容寻址)
+function embeddedCoverPath(audioPath) {
+  if (typeof audioPath !== 'string' || !audioPath) return '';
+  let res = null;
+  try {
+    res = embeddedCover.extractCover(audioPath);
+  } catch (_error) {
+    res = null;
+  }
+  if (!res || !res.data || !res.data.length) return '';
+  try {
+    const hash = crypto.createHash('sha1').update(res.data).digest('hex');
+    const dir = path.join(app.getPath('userData'), 'embedded-covers');
+    fs.mkdirSync(dir, { recursive: true });
+    const out = path.join(dir, `${hash}.${res.ext || 'jpg'}`);
+    if (!fs.existsSync(out)) fs.writeFileSync(out, res.data);
+    return out;
+  } catch (_error) {
+    return '';
   }
 }
 
@@ -211,7 +262,53 @@ ipcMain.handle('cover:find', async (_event, audioPath) => {
     allowedPaths.add(custom);
     return { kind: 'custom', path: custom, url: mediaUrl(custom) };
   }
+  // 专辑(文件夹)级封面覆盖
+  const folderHit = folderCoverOverride(path.dirname(audioPath));
+  if (folderHit) {
+    allowedPaths.add(folderHit);
+    return { kind: 'folder', path: folderHit, url: mediaUrl(folderHit) };
+  }
   const auto = library.findCoverForAudio(audioPath);
+  if (auto) {
+    allowedPaths.add(auto);
+    return { kind: 'auto', path: auto, url: mediaUrl(auto) };
+  }
+  // 内嵌封面
+  const embedded = embeddedCoverPath(audioPath);
+  if (embedded) {
+    allowedPaths.add(embedded);
+    return { kind: 'embedded', path: embedded, url: mediaUrl(embedded) };
+  }
+  return null;
+});
+
+ipcMain.handle('cover:setFolder', async (_event, folderPath, coverPath) => {
+  if (!folderPath || !coverPath) return false;
+  const store = readFolderCoverStore();
+  store[folderPath] = coverPath;
+  writeFolderCoverStore(store);
+  allowedPaths.add(coverPath);
+  return true;
+});
+
+ipcMain.handle('cover:clearFolder', async (_event, folderPath) => {
+  if (!folderPath) return false;
+  const store = readFolderCoverStore();
+  if (store[folderPath]) {
+    delete store[folderPath];
+    writeFolderCoverStore(store);
+  }
+  return true;
+});
+
+ipcMain.handle('cover:folderCover', async (_event, folderPath) => {
+  if (typeof folderPath !== 'string' || !folderPath) return null;
+  const hit = folderCoverOverride(folderPath);
+  if (hit) {
+    allowedPaths.add(hit);
+    return { kind: 'folder', path: hit, url: mediaUrl(hit) };
+  }
+  const auto = library.findFolderCover(folderPath);
   if (auto) {
     allowedPaths.add(auto);
     return { kind: 'auto', path: auto, url: mediaUrl(auto) };
@@ -240,7 +337,8 @@ ipcMain.handle('cover:clearCustom', async (_event, audioPath) => {
 
 ipcMain.handle('library:scan', async (_event, folderPath) => {
   if (typeof folderPath !== 'string' || !folderPath || !fs.existsSync(folderPath)) return null;
-  const raw = library.buildLibrary(folderPath);
+  const override = folderCoverOverride(folderPath);
+  const raw = library.buildLibrary(folderPath, { folderCover: override });
   const tracks = raw.map((t) => {
     allowedPaths.add(t.path);
     const track = {
@@ -259,9 +357,17 @@ ipcMain.handle('library:scan', async (_event, folderPath) => {
     if (t.coverPath) allowedPaths.add(t.coverPath);
     return track;
   });
+  let folderCover = override || library.findFolderCover(folderPath) || '';
+  if (!folderCover) {
+    const withCover = tracks.find((t) => t.coverPath);
+    if (withCover) folderCover = withCover.coverPath;
+  }
+  if (folderCover) allowedPaths.add(folderCover);
   return {
     folderPath,
     name: path.basename(folderPath) || folderPath,
+    folderCover,
+    folderCoverUrl: folderCover ? mediaUrl(folderCover) : '',
     tracks,
   };
 });

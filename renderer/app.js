@@ -20,6 +20,9 @@
     findCover: async () => null,
     saveCustomCover: async () => false,
     clearCustomCover: async () => false,
+    setFolderCover: async () => false,
+    clearFolderCover: async () => false,
+    folderCover: async () => null,
     transcribeEnv: async () => null,
     transcribePickModelDir: async () => null,
     transcribeStart: async () => ({ error: 'unavailable' }),
@@ -57,6 +60,9 @@
     playlist: [],
     currentIndex: -1,
     folderName: '',
+    folderPath: '',
+    pendingResume: 0,
+    albums: [],
     transcribe: {
       jobId: null,
       running: false,
@@ -64,9 +70,17 @@
       modelDir: '',
       device: 'auto',
       compute: 'auto',
+      scope: 'current',
+      format: 'vtt',
+      vad: false,
+      skipExisting: true,
       progress: 0,
       statusMsg: '',
       env: null,
+      queue: [],
+      filesTotal: 0,
+      filesDone: 0,
+      fileIndex: -1,
     },
   };
 
@@ -132,6 +146,17 @@
     transcribeSegment: $('#transcribeSegment'),
     transcribeStart: $('#transcribeStart'),
     transcribeCancel: $('#transcribeCancel'),
+    transcribeScope: $('#transcribeScope'),
+    transcribeFormat: $('#transcribeFormat'),
+    transcribeVad: $('#transcribeVad'),
+    transcribeSkip: $('#transcribeSkip'),
+    transcribeQueue: $('#transcribeQueue'),
+    transcribeQueueList: $('#transcribeQueueList'),
+    transcribeQueueStat: $('#transcribeQueueStat'),
+    transcribeScopeNote: $('#transcribeScopeNote'),
+    albumList: $('#albumList'),
+    albumEmpty: $('#albumEmpty'),
+    addAlbumBtn: $('#addAlbumBtn'),
   };
 
   // ---------- helpers ----------
@@ -194,6 +219,81 @@
     document.body.classList.toggle('is-busy', busy);
   }
 
+  // ---------- persistent storage ----------
+  const STORE = {
+    session: 'wavplayer.session',
+    positions: 'wavplayer.positions',
+    albums: 'wavplayer.albums',
+    transcribe: 'wavplayer.transcribe',
+    archiveW: 'wavplayer.archiveWidth',
+  };
+
+  function loadJSON(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      const value = JSON.parse(raw);
+      return value == null ? fallback : value;
+    } catch (_e) {
+      return fallback;
+    }
+  }
+
+  function saveJSON(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+
+  // ---------- session / playback positions ----------
+  let positions = loadJSON(STORE.positions, {});
+  let posDirty = false;
+  let lastPosTick = 0;
+
+  function persistPositions() {
+    if (!posDirty) return;
+    posDirty = false;
+    const keys = Object.keys(positions);
+    if (keys.length > 800) {
+      keys
+        .sort((a, b) => (positions[a].at || 0) - (positions[b].at || 0))
+        .slice(0, keys.length - 600)
+        .forEach((k) => delete positions[k]);
+    }
+    saveJSON(STORE.positions, positions);
+  }
+
+  function savePosition(path, seconds) {
+    if (!path) return;
+    if (!isFinite(seconds) || seconds < 3) delete positions[path];
+    else positions[path] = { t: Math.round(seconds), at: Date.now() };
+    posDirty = true;
+  }
+
+  function getSavedPosition(path) {
+    const hit = path ? positions[path] : null;
+    return hit && typeof hit.t === 'number' && hit.t > 3 ? hit.t : 0;
+  }
+
+  function saveSession() {
+    saveJSON(STORE.session, {
+      folderPath: state.folderPath || '',
+      currentIndex: state.currentIndex,
+      currentTime: state.audio.currentTime || 0,
+      savedAt: Date.now(),
+    });
+  }
+
+  function clearSession() {
+    try {
+      localStorage.removeItem(STORE.session);
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+
   // ---------- view switching ----------
   const railItems = $$('.rail-item[data-view]');
 
@@ -213,7 +313,9 @@
     $('#panelPlaylist').hidden = view !== 'list';
     $('#panelTranscript').hidden = view !== 'subtitle';
     $('#panelRecord').hidden = view !== 'record';
+    $('#panelAlbums').hidden = view !== 'albums';
     if (view === 'record') updateRecord();
+    if (view === 'albums') renderAlbums();
   }
 
   railItems.forEach((btn) => {
@@ -376,6 +478,11 @@
       idx.className = 'pl-index';
       idx.textContent = String(index + 1).padStart(2, '0');
 
+      const thumb = document.createElement('span');
+      thumb.className = 'pl-thumb' + (track.coverUrl ? ' has' : '');
+      if (track.coverUrl) thumb.style.backgroundImage = `url("${track.coverUrl}")`;
+      else thumb.textContent = '♪';
+
       const main = document.createElement('span');
       main.className = 'pl-main';
       const name = document.createElement('span');
@@ -403,19 +510,75 @@
       meta.textContent = (track.ext ? track.ext.toUpperCase() : '') + (track.size ? ' · ' + fmtSizeShort(track.size) : '');
 
       item.appendChild(idx);
+      item.appendChild(thumb);
       item.appendChild(main);
       item.appendChild(meta);
       item.addEventListener('click', () => loadTrack(index));
       el.playlistList.appendChild(item);
     });
+    resolvePlaylistCovers();
   }
 
-  function loadTrack(index) {
+  // 懒加载: 为缺少封面文件的曲目解析内嵌封面 (限量, 避免卡顿)
+  let coverResolveRunning = false;
+
+  function updatePlaylistRow(index) {
+    const row = el.playlistList.querySelector(`.pl-item[data-index="${index}"]`);
+    const track = state.playlist[index];
+    if (!row || !track) return;
+    const thumb = row.querySelector('.pl-thumb');
+    if (thumb && track.coverUrl) {
+      thumb.classList.add('has');
+      thumb.style.backgroundImage = `url("${track.coverUrl}")`;
+      thumb.textContent = '';
+    }
+    const badges = row.querySelector('.pl-badges');
+    if (badges && track.coverUrl && !badges.querySelector('.is-cover')) {
+      const cb = document.createElement('span');
+      cb.className = 'pl-badge is-cover';
+      cb.textContent = '封面';
+      badges.appendChild(cb);
+    }
+  }
+
+  async function resolvePlaylistCovers() {
+    if (coverResolveRunning) return;
+    coverResolveRunning = true;
+    let budget = 150;
+    try {
+      for (let i = 0; i < state.playlist.length && budget > 0; i++) {
+        const track = state.playlist[i];
+        if (track.coverUrl || track.coverResolved) continue;
+        track.coverResolved = true;
+        budget -= 1;
+        try {
+          const found = await api.findCover(track.path);
+          if (found && found.url) {
+            track.coverUrl = found.url;
+            track.coverPath = found.path || '';
+            track.coverKind = found.kind || 'auto';
+            updatePlaylistRow(i);
+          }
+        } catch (_e) {
+          /* ignore individual failures */
+        }
+      }
+    } finally {
+      coverResolveRunning = false;
+    }
+  }
+
+  function loadTrack(index, autoplay) {
     if (index < 0 || index >= state.playlist.length) return;
     const track = state.playlist[index];
     state.currentIndex = index;
-    loadAudio({ url: track.url, path: track.path, name: track.name }, track, !state.audio.paused);
+    loadAudio(
+      { url: track.url, path: track.path, name: track.name },
+      track,
+      autoplay != null ? autoplay : !state.audio.paused
+    );
     renderPlaylist();
+    saveSession();
   }
 
   function prevTrack() {
@@ -434,21 +597,48 @@
     if (state.audioReady) state.audio.play().catch(() => {});
   }
 
-  async function loadFolder() {
-    const folderPath = await api.openFolder();
-    if (!folderPath) return;
+  // 把扫描结果应用到界面 (播放列表 / 专辑 / 封面)
+  function applyLibrary(lib, opts) {
+    const options = opts || {};
+    state.playlist = lib.tracks || [];
+    state.folderName = lib.name || '';
+    state.folderPath = lib.folderPath || '';
+    state.currentIndex = -1;
+    upsertAlbum({
+      path: state.folderPath,
+      name: state.folderName,
+      coverPath: lib.folderCover || '',
+      coverUrl: lib.folderCoverUrl || '',
+      trackCount: state.playlist.length,
+      touch: true,
+    });
+    renderPlaylist();
+    renderAlbums();
+    updateScopeNote();
+    if (!options.noLoad && state.playlist.length) loadTrack(0, options.autoplay);
+  }
+
+  async function openFolderPath(folderPath, opts) {
+    const options = opts || {};
+    if (!folderPath) return false;
     setStatus('正在扫描文件夹…', 'ok');
     const library = await api.scanFolder(folderPath);
     if (!library || !library.tracks.length) {
       setStatus('该文件夹没有可播放的音频', 'warn');
-      return;
+      return false;
     }
-    state.playlist = library.tracks;
-    state.folderName = library.name;
+    applyLibrary(library, { noLoad: true });
     setView('list');
-    renderPlaylist();
     setStatus(`已载入 ${library.tracks.length} 个音频`, 'ok');
-    loadTrack(0);
+    const index = options.index != null ? clamp(options.index, 0, library.tracks.length - 1) : 0;
+    loadTrack(index, options.autoplay === true);
+    return true;
+  }
+
+  async function loadFolder() {
+    const folderPath = await api.openFolder();
+    if (!folderPath) return;
+    await openFolderPath(folderPath, { autoplay: true });
   }
 
   function playSingle(source) {
@@ -477,10 +667,186 @@
   el.playAllBtn.addEventListener('click', playAll);
   renderPlaylist();
 
+  // ---------- albums (专辑文件夹管理) ----------
+  state.albums = loadJSON(STORE.albums, []);
+
+  function saveAlbums() {
+    saveJSON(STORE.albums, state.albums);
+  }
+
+  function upsertAlbum(entry) {
+    if (!entry || !entry.path) return;
+    const idx = state.albums.findIndex((a) => a.path === entry.path);
+    const prev = idx >= 0 ? state.albums[idx] : {};
+    const next = {
+      path: entry.path,
+      name: entry.name || prev.name || basename(entry.path),
+      coverPath: entry.coverPath || prev.coverPath || '',
+      coverUrl: entry.coverUrl || prev.coverUrl || '',
+      trackCount: entry.trackCount != null ? entry.trackCount : prev.trackCount || 0,
+      addedAt: prev.addedAt || Date.now(),
+      openedAt: entry.touch ? Date.now() : prev.openedAt || Date.now(),
+    };
+    if (idx >= 0) state.albums[idx] = next;
+    else state.albums.push(next);
+    saveAlbums();
+  }
+
+  function removeAlbum(path) {
+    state.albums = state.albums.filter((a) => a.path !== path);
+    saveAlbums();
+    renderAlbums();
+    setStatus('已从专辑列表移除（不删除文件）', 'warn');
+  }
+
+  function renderAlbums() {
+    const list = el.albumList;
+    list.querySelectorAll('.album-card').forEach((n) => n.remove());
+    if (!state.albums.length) {
+      el.albumEmpty.style.display = '';
+      return;
+    }
+    el.albumEmpty.style.display = 'none';
+    state.albums
+      .slice()
+      .sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0))
+      .forEach((album) => {
+        const card = document.createElement('div');
+        card.className = 'album-card' + (album.path === state.folderPath ? ' is-active' : '');
+        card.setAttribute('role', 'listitem');
+        card.setAttribute('data-album', album.path);
+        card.tabIndex = 0;
+
+        const cover = document.createElement('span');
+        cover.className = 'album-cover';
+        if (album.coverUrl) cover.style.backgroundImage = `url("${album.coverUrl}")`;
+        else cover.textContent = '♪';
+
+        const info = document.createElement('span');
+        info.className = 'album-info';
+        const nm = document.createElement('span');
+        nm.className = 'album-name';
+        nm.textContent = album.name || basename(album.path);
+        const mt = document.createElement('span');
+        mt.className = 'album-meta';
+        mt.textContent = `${album.trackCount || 0} 首 · ${album.path}`;
+        info.appendChild(nm);
+        info.appendChild(mt);
+
+        const btns = document.createElement('span');
+        btns.className = 'album-btns';
+        const coverBtn = document.createElement('button');
+        coverBtn.className = 'album-btn';
+        coverBtn.type = 'button';
+        coverBtn.title = '设置专辑封面';
+        coverBtn.setAttribute('aria-label', '设置专辑封面');
+        coverBtn.textContent = '封';
+        coverBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          chooseAlbumCover(album);
+        });
+        const rmBtn = document.createElement('button');
+        rmBtn.className = 'album-btn';
+        rmBtn.type = 'button';
+        rmBtn.title = '从列表移除';
+        rmBtn.setAttribute('aria-label', '从列表移除');
+        rmBtn.textContent = '✕';
+        rmBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          removeAlbum(album.path);
+        });
+        btns.appendChild(coverBtn);
+        btns.appendChild(rmBtn);
+
+        card.appendChild(cover);
+        card.appendChild(info);
+        card.appendChild(btns);
+        card.addEventListener('click', () => openAlbum(album));
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openAlbum(album);
+          }
+        });
+        list.appendChild(card);
+      });
+    resolveAlbumCovers();
+  }
+
+  let albumCoverRunning = false;
+
+  async function resolveAlbumCovers() {
+    if (albumCoverRunning) return;
+    albumCoverRunning = true;
+    try {
+      for (const album of state.albums) {
+        if (album.coverUrl || album.coverResolved) continue;
+        album.coverResolved = true;
+        try {
+          const found = await api.folderCover(album.path);
+          if (found && found.url) {
+            album.coverUrl = found.url;
+            album.coverPath = found.path || '';
+            saveAlbums();
+            const card = el.albumList.querySelector(`.album-card[data-album="${CSS.escape(album.path)}"]`);
+            if (card) {
+              const cov = card.querySelector('.album-cover');
+              if (cov) {
+                cov.style.backgroundImage = `url("${album.coverUrl}")`;
+                cov.textContent = '';
+              }
+            }
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+    } finally {
+      albumCoverRunning = false;
+    }
+  }
+
+  async function openAlbum(album) {
+    if (!album || !album.path) return;
+    await openFolderPath(album.path, { autoplay: false });
+  }
+
+  async function addAlbum() {
+    const folderPath = await api.openFolder();
+    if (!folderPath) return;
+    await openFolderPath(folderPath, { autoplay: false });
+  }
+
+  async function chooseAlbumCover(album) {
+    if (!album || !album.path) return;
+    const res = await api.openCover();
+    if (!res) return;
+    await api.setFolderCover(album.path, res.path);
+    album.coverPath = res.path;
+    album.coverUrl = res.url;
+    saveAlbums();
+    renderAlbums();
+    setStatus('已设置专辑封面', 'ok');
+    // 若正是当前专辑, 重新扫描以套用封面
+    if (album.path === state.folderPath) {
+      await openFolderPath(album.path, { autoplay: false, index: state.currentIndex });
+      setView('albums');
+    }
+  }
+
+  el.addAlbumBtn.addEventListener('click', addAlbum);
+  renderAlbums();
+
   // ---------- audio loading ----------
-  async function loadAudio(source, track, autoplay = false) {
+  async function loadAudio(source, track, autoplay = false, resumeAt) {
     const { url, path, name } = source;
     const resumePlay = autoplay || !state.audio.paused;
+    // 切歌前先记录上一首的播放位置
+    if (state.audioPath && state.audioPath !== path) {
+      savePosition(state.audioPath, state.audio.currentTime);
+      persistPositions();
+    }
+    state.pendingResume = typeof resumeAt === 'number' ? resumeAt : getSavedPosition(path);
     state.audio.src = url;
     state.audio.load();
     state.audioPath = path || '';
@@ -853,8 +1219,26 @@
     state.isPlaying = false;
     el.btnPlay.classList.remove('is-playing');
     el.btnPlay.setAttribute('aria-label', '播放');
+    savePosition(state.audioPath, state.audio.currentTime);
+    persistPositions();
+    saveSession();
   });
-  state.audio.addEventListener('loadedmetadata', updateTransport);
+  state.audio.addEventListener('loadedmetadata', () => {
+    updateTransport();
+    if (state.pendingResume) {
+      const t = state.pendingResume;
+      const dur = state.audio.duration;
+      if (!isFinite(dur) || t < dur - 2) {
+        try {
+          state.audio.currentTime = t;
+          setStatus(`已回到上次位置 ${formatTime(t)}`, 'ok');
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+      state.pendingResume = 0;
+    }
+  });
   state.audio.addEventListener('durationchange', updateTransport);
   state.audio.addEventListener('ended', () => {
     if (!state.loop && !state.ab.on) el.btnPlay.classList.remove('is-playing');
@@ -976,6 +1360,15 @@
       if (state.ab.on && state.ab.b !== null && !audio.paused && t >= state.ab.b) {
         audio.currentTime = state.ab.a || 0;
       }
+      if (state.isPlaying) {
+        const now = performance.now();
+        if (now - lastPosTick > 3000) {
+          lastPosTick = now;
+          savePosition(state.audioPath, t);
+          persistPositions();
+          saveSession();
+        }
+      }
     }
     requestAnimationFrame(frame);
   }
@@ -1011,33 +1404,30 @@
   }
 
   function persistTranscribe() {
-    try {
-      localStorage.setItem(
-        'resonance.transcribe',
-        JSON.stringify({
-          modelSource: tstate().modelSource,
-          modelDir: tstate().modelDir,
-          device: tstate().device,
-          compute: tstate().compute,
-        })
-      );
-    } catch (_e) {
-      /* ignore */
-    }
+    saveJSON(STORE.transcribe, {
+      modelSource: tstate().modelSource,
+      modelDir: tstate().modelDir,
+      device: tstate().device,
+      compute: tstate().compute,
+      scope: tstate().scope,
+      format: tstate().format,
+      vad: tstate().vad,
+      skipExisting: tstate().skipExisting,
+    });
   }
 
   function loadTranscribePrefs() {
-    try {
-      const raw = localStorage.getItem('resonance.transcribe');
-      if (!raw) return;
-      const p = JSON.parse(raw) || {};
-      if (p.modelSource) tstate().modelSource = p.modelSource;
-      if (p.modelDir) tstate().modelDir = p.modelDir;
-      if (p.device) tstate().device = p.device;
-      if (p.compute) tstate().compute = p.compute;
-    } catch (_e) {
-      /* ignore */
-    }
+    let p = loadJSON(STORE.transcribe, null);
+    if (!p) p = loadJSON('resonance.transcribe', null); // 兼容改名前的键
+    if (!p) return;
+    if (p.modelSource) tstate().modelSource = p.modelSource;
+    if (p.modelDir) tstate().modelDir = p.modelDir;
+    if (p.device) tstate().device = p.device;
+    if (p.compute) tstate().compute = p.compute;
+    if (p.scope) tstate().scope = p.scope;
+    if (p.format) tstate().format = p.format;
+    if (typeof p.vad === 'boolean') tstate().vad = p.vad;
+    if (typeof p.skipExisting === 'boolean') tstate().skipExisting = p.skipExisting;
   }
 
   function updateTranscribeModelHint() {
@@ -1059,6 +1449,7 @@
     const pct = clamp(removeNaN(percent, 0), 0, 100);
     el.transcribeBar.style.setProperty('--bar-fill', pct + '%');
     el.transcribePct.textContent = Math.round(pct) + '%';
+    el.transcribeProgressWrap.hidden = pct <= 0;
     tstate().progress = pct;
   }
 
@@ -1087,38 +1478,171 @@
       ' · Python ' + env.version + ' · faster-whisper ' + env.faster_whisper;
   }
 
-  function buildTranscribeConfig() {
+  function outputExt() {
+    return tstate().format === 'srt' ? '.zh.srt' : '.zh.vtt';
+  }
+
+  function audioPathFromOutput(output) {
+    return String(output || '').replace(/\.zh\.(vtt|srt)$/i, '');
+  }
+
+  // 组装转写队列 (当前曲目 / 整个文件夹)
+  function buildTranscribeQueue() {
     const t = tstate();
-    return {
-      audio: state.audioPath,
-      model_dir: t.modelSource === 'download' ? TRANSCRIBE_REPO : t.modelDir,
-      allow_download: t.modelSource === 'download',
-      output: state.audioPath + '.zh.vtt',
-      format: 'vtt',
-      device: t.device,
-      compute_type: t.compute,
-      language: 'ja',
-      task: 'translate',
-      beam_size: 5,
-      vad_filter: false,
-    };
+    if (t.scope === 'folder' && state.playlist.length) {
+      return state.playlist.map((tr, i) => ({
+        index: i,
+        path: tr.path,
+        name: tr.name,
+        status: 'idle',
+        percent: 0,
+        output: '',
+      }));
+    }
+    if (!state.audioPath) return [];
+    const idx = state.currentIndex;
+    const name =
+      (idx >= 0 && state.playlist[idx] && state.playlist[idx].name) ||
+      state.audioName ||
+      basename(state.audioPath);
+    return [{ index: 0, path: state.audioPath, name, status: 'idle', percent: 0, output: '' }];
+  }
+
+  const TQ_CLASS = { idle: '', run: 'is-run', done: 'is-done', skip: 'is-skip', fail: 'is-fail' };
+
+  function tqStatusLabel(item) {
+    if (item.status === 'run') return Math.round(item.percent || 0) + '%';
+    if (item.status === 'done') return '完成';
+    if (item.status === 'skip') return '跳过';
+    if (item.status === 'fail') return '失败';
+    return '等待';
+  }
+
+  function renderTranscribeQueue() {
+    const q = tstate().queue;
+    const show = q.length > 1;
+    el.transcribeQueue.hidden = !show;
+    el.transcribeQueueList.querySelectorAll('.tq-item').forEach((n) => n.remove());
+    if (!show) return;
+    updateQueueStat();
+    q.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'tq-item ' + (TQ_CLASS[item.status] || '');
+      row.setAttribute('role', 'listitem');
+      row.setAttribute('data-index', String(item.index));
+      const i = document.createElement('span');
+      i.className = 'tq-idx';
+      i.textContent = String(item.index + 1).padStart(2, '0');
+      const n = document.createElement('span');
+      n.className = 'tq-name';
+      n.textContent = item.name;
+      const s = document.createElement('span');
+      s.className = 'tq-status';
+      s.textContent = tqStatusLabel(item);
+      row.appendChild(i);
+      row.appendChild(n);
+      row.appendChild(s);
+      el.transcribeQueueList.appendChild(row);
+    });
+  }
+
+  function updateQueueStat() {
+    const q = tstate().queue;
+    const done = q.filter((x) => x.status !== 'idle' && x.status !== 'run').length;
+    el.transcribeQueueStat.textContent = `${done} / ${q.length}`;
+  }
+
+  function updateQueueItem(index, patch) {
+    const q = tstate().queue;
+    const item = q.find((x) => x.index === index);
+    if (!item) return;
+    Object.assign(item, patch);
+    const row = el.transcribeQueueList.querySelector(`.tq-item[data-index="${index}"]`);
+    if (!row) {
+      renderTranscribeQueue();
+      return;
+    }
+    row.className = 'tq-item ' + (TQ_CLASS[item.status] || '');
+    const s = row.querySelector('.tq-status');
+    if (s) s.textContent = tqStatusLabel(item);
+    updateQueueStat();
+    const active = row;
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }
+
+  function overallPercent() {
+    const t = tstate();
+    if (!t.filesTotal) return t.progress;
+    const current = t.queue.find((x) => x.index === t.fileIndex);
+    const cur = current ? (current.percent || 0) / 100 : 0;
+    return clamp(((t.filesDone + cur) / t.filesTotal) * 100, 0, 100);
+  }
+
+  function updateScopeNote() {
+    const t = tstate();
+    const n = state.playlist.length;
+    if (t.scope === 'folder') {
+      el.transcribeScopeNote.textContent = n ? `将转写当前列表全部 ${n} 首（模型只加载一次）` : '当前没有列表';
+    } else {
+      el.transcribeScopeNote.textContent = state.audioPath ? '仅转写当前曲目' : '尚未加载音频';
+    }
+  }
+
+  function setTranscribeScope(scope) {
+    tstate().scope = scope;
+    el.transcribeScope.querySelectorAll('.seg-btn').forEach((b) => {
+      const on = b.dataset.scope === scope;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    el.transcribeStart.textContent = scope === 'folder' ? '批量转译' : '开始转译';
+    updateScopeNote();
+    persistTranscribe();
   }
 
   async function startTranscribe() {
     const t = tstate();
-    if (!state.audioPath) {
-      setStatus('请先加载要转写的音频', 'warn');
-      return;
-    }
     if (t.running) return;
-    const config = buildTranscribeConfig();
     if (t.modelSource === 'local' && !t.modelDir) {
       setStatus('请先选择本地模型目录', 'warn');
       setTranscribeStatus('请先选择本地模型目录', true);
       return;
     }
+    const queue = buildTranscribeQueue();
+    if (!queue.length) {
+      setStatus('没有可转写的音频', 'warn');
+      setTranscribeStatus('没有可转写的音频', true);
+      return;
+    }
+    t.queue = queue;
+    t.filesTotal = queue.length;
+    t.filesDone = 0;
+    t.fileIndex = -1;
+    renderTranscribeQueue();
+
+    const batch = queue.length > 1;
+    const ext = outputExt();
+    const config = {
+      model_dir: t.modelSource === 'download' ? TRANSCRIBE_REPO : t.modelDir,
+      allow_download: t.modelSource === 'download',
+      format: t.format,
+      device: t.device,
+      compute_type: t.compute,
+      language: 'ja',
+      task: 'translate',
+      beam_size: 5,
+      vad_filter: t.vad,
+      skip_existing: t.skipExisting,
+    };
+    if (batch) {
+      config.audios = queue.map((x) => ({ audio: x.path, output: x.path + ext }));
+    } else {
+      config.audio = queue[0].path;
+      config.output = queue[0].path + ext;
+    }
+
     setTranscribeProgress(0);
-    setTranscribeStatus('正在启动转写…');
+    setTranscribeStatus(batch ? `准备批量转写 ${queue.length} 个文件…` : '正在启动转写…');
     el.transcribeSegment.hidden = true;
     const res = await api.transcribeStart('transcribe', config);
     if (!res || res.error) {
@@ -1132,6 +1656,37 @@
     el.transcribeStart.disabled = true;
     el.transcribeCancel.hidden = false;
     el.btnTranscribe.classList.add('is-on');
+  }
+
+  // 生成字幕后登记并 (若为当前曲目) 立即载入
+  async function registerSubtitle(output) {
+    if (!output) return null;
+    const url = await api.registerPath(output);
+    const audio = audioPathFromOutput(output);
+    const idx = state.playlist.findIndex((x) => x.path === audio);
+    if (idx >= 0) {
+      state.playlist[idx].subPath = output;
+      state.playlist[idx].subUrl = url;
+      state.playlist[idx].subName = basename(output);
+      updatePlaylistSub(idx);
+    }
+    if (audio === state.audioPath) {
+      await loadSubtitle({ url, path: output, name: basename(output) });
+    }
+    return url;
+  }
+
+  function updatePlaylistSub(index) {
+    const row = el.playlistList.querySelector(`.pl-item[data-index="${index}"]`);
+    const track = state.playlist[index];
+    if (!row || !track || !track.subUrl) return;
+    const badges = row.querySelector('.pl-badges');
+    if (badges && !badges.querySelector('.pl-badge:not(.is-cover)')) {
+      const b = document.createElement('span');
+      b.className = 'pl-badge';
+      b.textContent = '字幕';
+      badges.insertBefore(b, badges.firstChild);
+    }
   }
 
   async function cancelTranscribe() {
@@ -1152,6 +1707,17 @@
   }
 
   async function onTranscribeDone(evt) {
+    if (Array.isArray(evt.outputs)) {
+      setTranscribeProgress(100);
+      const parts = [`成功 ${evt.ok || 0}`];
+      if (evt.skipped) parts.push(`跳过 ${evt.skipped}`);
+      if (evt.failed) parts.push(`失败 ${evt.failed}`);
+      setTranscribeStatus(`批量完成 · ${parts.join(' · ')} · ${evt.elapsed || 0}s`);
+      setStatus(`批量转译完成 · ${evt.ok || 0} 个文件`, evt.failed ? 'warn' : 'ok');
+      endTranscribeUi();
+      saveSession();
+      return;
+    }
     const output = evt.output;
     setTranscribeProgress(100);
     setTranscribeStatus('完成 · ' + (evt.count || 0) + ' 条字幕 · ' + (evt.elapsed || 0) + 's');
@@ -1159,15 +1725,7 @@
     endTranscribeUi();
     if (output) {
       try {
-        const url = await api.registerPath(output);
-        await loadSubtitle({ url, path: output, name: basename(output) });
-        const idx = state.currentIndex;
-        if (idx >= 0 && state.playlist[idx]) {
-          state.playlist[idx].subPath = output;
-          state.playlist[idx].subUrl = url;
-          state.playlist[idx].subName = basename(output);
-          renderPlaylist();
-        }
+        await registerSubtitle(output);
       } catch (_err) {
         setStatus('已生成字幕, 但自动载入失败', 'warn');
       }
@@ -1182,20 +1740,48 @@
       case 'status':
         setTranscribeStatus((evt.message || '') + (evt.detail ? ' · ' + evt.detail : ''));
         break;
+      case 'batch':
+        tstate().filesTotal = evt.total || 0;
+        renderTranscribeQueue();
+        break;
+      case 'file':
+        tstate().fileIndex = evt.index;
+        updateQueueItem(evt.index, { status: evt.skipped ? 'skip' : 'run', percent: 0 });
+        if (!evt.skipped) setStatus(`转写中 · ${evt.index + 1}/${evt.total}`, 'ok');
+        setTranscribeStatus(`${evt.skipped ? '跳过已有' : '转写'} ${evt.index + 1}/${evt.total} · ${evt.name || ''}`);
+        break;
       case 'progress': {
         let pct = removeNaN(evt.percent, 0);
         if (!pct && evt.total) pct = (evt.completed / evt.total) * 100;
+        pct = clamp(pct, 0, 100);
         if (evt.what === 'download') {
           setTranscribeStatus('正在下载模型' + (evt.file ? ' · ' + evt.file : ''));
+          setTranscribeProgress(pct);
+        } else if (evt.index != null && tstate().filesTotal) {
+          updateQueueItem(evt.index, { status: 'run', percent: pct });
+          setTranscribeProgress(overallPercent());
         } else if (evt.completed != null && evt.total) {
           setTranscribeStatus('转写进行中 · ' + Math.round(pct) + '%');
+          setTranscribeProgress(pct);
+        } else {
+          setTranscribeProgress(pct);
         }
-        setTranscribeProgress(pct);
         break;
       }
       case 'segment':
         el.transcribeSegment.hidden = false;
         el.transcribeSegment.textContent = evt.text || '';
+        break;
+      case 'file_done':
+        tstate().filesDone += 1;
+        updateQueueItem(evt.index, { status: evt.skipped ? 'skip' : 'done', output: evt.output || '' });
+        setTranscribeProgress(overallPercent());
+        if (evt.output && !evt.skipped) registerSubtitle(evt.output).catch(() => {});
+        break;
+      case 'file_error':
+        tstate().filesDone += 1;
+        updateQueueItem(evt.index, { status: 'fail' });
+        setTranscribeProgress(overallPercent());
         break;
       case 'done':
         onTranscribeDone(evt);
@@ -1206,6 +1792,7 @@
         endTranscribeUi();
         break;
       case 'cancelled':
+        setTranscribeStatus('已取消', true);
         endTranscribeUi();
         break;
       default:
@@ -1214,19 +1801,28 @@
   }
 
   function openTranscribe() {
-    if (!state.audioPath) {
-      setStatus('请先加载要转写的音频', 'warn');
+    if (!state.audioPath && !state.playlist.length) {
+      setStatus('请先加载音频或文件夹', 'warn');
       return;
     }
+    const t = tstate();
     el.transcribeModal.hidden = false;
-    el.transcribeModel.value = tstate().modelSource;
-    el.transcribeDevice.value = tstate().device;
-    el.transcribeCompute.value = tstate().compute;
+    el.transcribeModel.value = t.modelSource;
+    el.transcribeDevice.value = t.device;
+    el.transcribeCompute.value = t.compute;
+    el.transcribeFormat.value = t.format;
+    el.transcribeVad.checked = !!t.vad;
+    el.transcribeSkip.checked = !!t.skipExisting;
+    setTranscribeScope(t.scope);
     updateTranscribeModelHint();
-    setTranscribeProgress(tstate().progress);
-    setTranscribeStatus(tstate().running ? '转写进行中…' : '');
+    setTranscribeProgress(t.progress);
+    setTranscribeStatus(t.running ? '转写进行中…' : '');
     el.transcribeSegment.hidden = true;
-    if (!tstate().running) detectEnvAndShow();
+    if (!t.running) {
+      t.queue = [];
+    }
+    renderTranscribeQueue();
+    if (!t.running) detectEnvAndShow();
   }
 
   function closeTranscribe() {
@@ -1264,9 +1860,25 @@
     tstate().compute = el.transcribeCompute.value;
     persistTranscribe();
   });
+  el.transcribeFormat.addEventListener('change', () => {
+    tstate().format = el.transcribeFormat.value;
+    persistTranscribe();
+  });
+  el.transcribeVad.addEventListener('change', () => {
+    tstate().vad = el.transcribeVad.checked;
+    persistTranscribe();
+  });
+  el.transcribeSkip.addEventListener('change', () => {
+    tstate().skipExisting = el.transcribeSkip.checked;
+    persistTranscribe();
+  });
+  el.transcribeScope.querySelectorAll('.seg-btn').forEach((btn) => {
+    btn.addEventListener('click', () => setTranscribeScope(btn.dataset.scope));
+  });
   api.onTranscribeEvent(onTranscribeEvent);
   api.onMenuTranscribe(openTranscribe);
   loadTranscribePrefs();
+  setTranscribeScope(tstate().scope);
   updateTranscribeModelHint();
 
   // ---------- drag and drop ----------
@@ -1416,7 +2028,7 @@
   });
 
   // ---------- resizable archive width ----------
-  const ARCHIVE_W_KEY = 'resonance.archiveWidth';
+  const ARCHIVE_W_KEY = STORE.archiveW;
   const ARCHIVE_MIN = 280;
   const ARCHIVE_DEFAULT = 21 * 16;
 
@@ -1449,7 +2061,9 @@
     setStatus('已重置侧栏宽度');
   }
 
-  const savedW = Number.parseFloat(localStorage.getItem(ARCHIVE_W_KEY));
+  const savedW = Number.parseFloat(
+    localStorage.getItem(ARCHIVE_W_KEY) || localStorage.getItem('resonance.archiveWidth')
+  );
   if (savedW > 0) setArchiveWidth(clampArchiveW(savedW, maxArchiveW() || Infinity));
 
   let resizing = false;
@@ -1508,11 +2122,45 @@
     commitArchiveWidth(next);
   });
 
+  // ---------- session restore ----------
+  async function restoreSession() {
+    const s = loadJSON(STORE.session, null);
+    if (!s || !s.folderPath) return false;
+    let lib = null;
+    try {
+      lib = await api.scanFolder(s.folderPath);
+    } catch (_e) {
+      lib = null;
+    }
+    if (!lib || !lib.tracks || !lib.tracks.length) {
+      clearSession();
+      return false;
+    }
+    applyLibrary(lib, { noLoad: true });
+    setView('list');
+    const index = clamp(s.currentIndex | 0, 0, lib.tracks.length - 1);
+    const track = lib.tracks[index];
+    const resumeAt = typeof s.currentTime === 'number' && s.currentTime > 3 ? s.currentTime : undefined;
+    state.currentIndex = index;
+    renderPlaylist();
+    await loadAudio({ url: track.url, path: track.path, name: track.name }, track, false, resumeAt);
+    setStatus(`已恢复上次播放 · ${lib.name}`, 'ok');
+    return true;
+  }
+
+  window.addEventListener('beforeunload', () => {
+    savePosition(state.audioPath, state.audio.currentTime);
+    persistPositions();
+    saveSession();
+  });
+
   // ---------- init ----------
   updateVolIcon();
   updateAbUI();
   setView('list');
+  renderAlbums();
   requestAnimationFrame(frame);
+  restoreSession();
 
   // QA-only facade, activated with ?qa=1. Never present in the packaged app.
   if (new URLSearchParams(location.search).has('qa')) {
@@ -1528,14 +2176,36 @@
       loadFolderPath: (p) =>
         api.scanFolder(p).then((lib) => {
           if (!lib || !lib.tracks.length) return 0;
-          state.playlist = lib.tracks;
-          state.folderName = lib.name;
+          applyLibrary(lib, { noLoad: true });
           setView('list');
-          renderPlaylist();
-          loadTrack(0);
+          loadTrack(0, false);
           return lib.tracks.length;
         }),
       playTrack: (index) => loadTrack(index),
+      albums: {
+        render: renderAlbums,
+        list: () => state.albums,
+        openPath: (p) => openFolderPath(p, { autoplay: false }),
+        setCover: async (folderPath, coverPath) => {
+          await api.setFolderCover(folderPath, coverPath);
+          const a = state.albums.find((x) => x.path === folderPath);
+          if (a) a.coverPath = coverPath;
+          saveAlbums();
+          renderAlbums();
+          return true;
+        },
+        remove: removeAlbum,
+      },
+      session: {
+        save: () => {
+          savePosition(state.audioPath, state.audio.currentTime);
+          persistPositions();
+          saveSession();
+          return loadJSON(STORE.session, null);
+        },
+        restore: restoreSession,
+        positions: () => positions,
+      },
       setArchiveW: (w) => setArchiveWidth(clampArchiveW(w, maxArchiveW() || Infinity)),
       dragArchive: (clientX) => {
         const w = clampArchiveW(el.stage.getBoundingClientRect().right - clientX, maxArchiveW());
@@ -1554,6 +2224,9 @@
         setEnv: (env) => {
           tstate().env = env;
         },
+        setScope: setTranscribeScope,
+        buildQueue: () => buildTranscribeQueue(),
+        queue: () => tstate().queue,
         beginFake: (jobId) => {
           const t = tstate();
           t.jobId = jobId || 'qa-job';

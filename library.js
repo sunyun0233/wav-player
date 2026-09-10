@@ -156,7 +156,8 @@ function walkFiles(root, out, depth) {
 
 // Build the playlist for a folder. Returns plain paths; the caller derives
 // media URLs and registers the paths with the media protocol.
-function buildLibrary(folderPath) {
+function buildLibrary(folderPath, opts) {
+  const options = opts || {};
   const files = [];
   walkFiles(folderPath, files, 0);
   const audioFiles = files.filter((f) => AUDIO_EXTS.includes(f.ext));
@@ -172,7 +173,9 @@ function buildLibrary(folderPath) {
     }
   }
 
-  const folderCover = findFolderCover(folderPath);
+  // 专辑(文件夹)级封面: 显式覆盖优先, 否则自动探测
+  const override = options.folderCover && fs.existsSync(options.folderCover) ? options.folderCover : '';
+  const folderCover = override || findFolderCover(folderPath);
   const tracks = [];
   for (const audio of audioFiles) {
     const audioNameLower = audio.name.toLowerCase();

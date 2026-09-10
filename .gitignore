@@ -18,3 +18,4 @@ smoke-*.txt
 *-err.txt
 .DS_Store
 Thumbs.db
+_work/

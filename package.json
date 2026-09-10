@@ -27,6 +27,7 @@
   ],
   "scripts": {
     "start": "electron .",
+    "test": "node test/embedded-cover.test.js",
     "pack": "electron-builder --win dir",
     "pack:portable": "electron-builder --win portable"
   },
@@ -45,6 +46,7 @@
       "main.js",
       "preload.js",
       "library.js",
+      "embedded-cover.js",
       "transcribe.js",
       "transcribe.py",
       "renderer/**"

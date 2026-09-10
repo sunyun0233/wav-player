@@ -23,7 +23,8 @@ stdout 输出一条条 JSON 行:
   {"type":"error","code":"...","message":"..."}
 
 config 字段(全部可省略):
-  audio          str  音频绝对路径
+  audio          str  单个音频绝对路径 (单文件模式)
+  audios         list 批量模式: ["a.wav", ...] 或 [{"audio":...,"output":...}]
   model_dir      str  本地 CT2 模型目录, 或 HF repo id
   output         str  输出字幕绝对路径 (默认 audio + ".zh.vtt")
   format         str  "vtt" | "srt" (默认 vtt)
@@ -33,7 +34,15 @@ config 字段(全部可省略):
   task           str  "translate"|"transcribe" (默认 translate)
   beam_size      int  默认 5
   vad_filter     bool 默认 False
+  skip_existing  bool 批量时跳过已存在的字幕 (默认 False)
   allow_download bool 默认 False
+
+批量模式额外事件:
+  {"type":"batch","total":N}
+  {"type":"file","index":i,"total":N,"audio":...,"name":...,"skipped":bool}
+  {"type":"file_done","index":i,"output":...,"count":N,"elapsed":s,"skipped":bool}
+  {"type":"file_error","index":i,"audio":...,"message":...}
+  {"type":"done","total":N,"ok":..,"failed":..,"skipped":..,"outputs":[...]}
 """
 
 from __future__ import annotations
@@ -308,38 +317,64 @@ def _format_ss(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def transcribe(config: dict) -> None:
-    audio = str(config.get("audio") or "")
-    if not audio or not os.path.exists(audio):
-        emit({"type": "error", "code": "bad_audio", "message": "音频文件不存在: " + audio})
-        return
+def default_output(audio: str, fmt: str) -> str:
+    return audio + (".zh.vtt" if fmt == "vtt" else ".zh.srt")
 
+
+def build_jobs(config: dict, fmt: str) -> list[dict]:
+    """把 config 归一化成 [{audio, output}]。audios 存在时为批量模式。"""
+    jobs: list[dict] = []
+    audios = config.get("audios")
+    if isinstance(audios, list) and audios:
+        for item in audios:
+            if isinstance(item, str):
+                jobs.append({"audio": item, "output": default_output(item, fmt)})
+            elif isinstance(item, dict):
+                audio = str(item.get("audio") or item.get("path") or "")
+                output = str(item.get("output") or "") or default_output(audio, fmt)
+                jobs.append({"audio": audio, "output": output})
+    else:
+        audio = str(config.get("audio") or "")
+        output = str(config.get("output") or "") or default_output(audio, fmt)
+        jobs.append({"audio": audio, "output": output})
+    return jobs
+
+
+def resolve_model_dir(config: dict) -> str:
+    """解析本地模型目录, 失败返回空串 (并已 emit error)。"""
     model_dir = str(config.get("model_dir") or "")
     allow_download = bool(config.get("allow_download"))
-    repo_id = ""
-    if model_dir and not os.path.isdir(model_dir):
-        repo_id = model_dir
-        local_target = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "models", repo_id.split("/")[-1]
-        )
-        # 离线优先: 若本地已有模型, 直接复用, 不触发网络
-        if os.path.isdir(local_target) and os.path.exists(os.path.join(local_target, "model.bin")):
-            model_dir = local_target
-        elif allow_download:
-            downloaded = download_model_to_local(repo_id, local_target)
-            if not downloaded:
-                return
-            model_dir = local_target
-        else:
-            emit(
-                {
-                    "type": "error",
-                    "code": "model_missing",
-                    "message": f"模型目录不存在: {model_dir}。请先下载模型或选择有效目录。",
-                }
-            )
-            return
+    if os.path.isdir(model_dir):
+        return model_dir
+    if not model_dir:
+        emit({"type": "error", "code": "model_missing", "message": "未指定模型目录"})
+        return ""
+    repo_id = model_dir
+    local_target = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "models", repo_id.split("/")[-1]
+    )
+    # 离线优先: 若本地已有模型, 直接复用, 不触发网络
+    if os.path.isdir(local_target) and os.path.exists(os.path.join(local_target, "model.bin")):
+        return local_target
+    if allow_download:
+        if download_model_to_local(repo_id, local_target):
+            return local_target
+        return ""
+    emit(
+        {
+            "type": "error",
+            "code": "model_missing",
+            "message": f"模型目录不存在: {model_dir}。请先下载模型或选择有效目录。",
+        }
+    )
+    return ""
 
+
+def load_whisper(config: dict):
+    """加载模型一次, 返回 (model, device, compute_type)。失败时 model 为 None。"""
+    model_dir = resolve_model_dir(config)
+    if not model_dir:
+        return None, None, None
     device, compute_type = resolve_device(config)
     emit(
         {
@@ -348,11 +383,9 @@ def transcribe(config: dict) -> None:
             "detail": f"device={device} compute_type={compute_type}",
         }
     )
-    t0 = time.time()
-
     try:
         from faster_whisper import WhisperModel
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         emit(
             {
                 "type": "error",
@@ -360,51 +393,42 @@ def transcribe(config: dict) -> None:
                 "message": "缺少 faster-whisper。请在 Python 3.11 环境执行: pip install faster-whisper",
             }
         )
-        return
-
+        return None, device, compute_type
     try:
         model = WhisperModel(model_dir, device=device, compute_type=compute_type)
     except Exception as exc:  # noqa: BLE001
         emit({"type": "error", "code": "load_model", "message": str(exc)})
-        return
+        return None, device, compute_type
+    return model, device, compute_type
 
-    emit({"type": "status", "message": "模型已加载, 开始转写", "detail": audio})
 
-    language = str(config.get("language") or "ja")
-    task = str(config.get("task") or "translate")
-    beam_size = int(config.get("beam_size") or 5)
-    vad_filter = bool(config.get("vad_filter"))
-
+def transcribe_file(model, audio, config, output, fmt, index=None, total_files=None):
+    """转写单个文件, 返回 {output,count,elapsed}; 失败返回 None。"""
+    ctx = {"index": index, "total": total_files} if index is not None else {}
+    fail_type = "file_error" if index is not None else "error"
     try:
         segments, info = model.transcribe(
             audio,
-            language=language if language else None,
-            task=task,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
+            language=(str(config.get("language") or "ja") or None),
+            task=str(config.get("task") or "translate"),
+            beam_size=int(config.get("beam_size") or 5),
+            vad_filter=bool(config.get("vad_filter")),
         )
     except Exception as exc:  # noqa: BLE001
-        emit({"type": "error", "code": "transcribe", "message": str(exc)})
-        return
+        emit({"type": fail_type, "code": "transcribe", "message": str(exc), "audio": audio, **ctx})
+        return None
 
     total = float(getattr(info, "duration", 0) or 0)
-    output = str(config.get("output") or "")
-    fmt = str(config.get("format") or "vtt").lower()
-    if fmt not in ("vtt", "srt"):
-        emit({"type": "error", "code": "bad_format", "message": "format 仅支持 vtt / srt"})
-        return
-    if not output:
-        output = audio + (".zh.vtt" if fmt == "vtt" else ".zh.srt")
-
-    collected = []
-    last_progress = {"t": time.time()}
+    t0 = time.time()
+    collected: list[dict] = []
+    last_progress = {"t": t0}
     try:
         for seg in segments:
             start = float(getattr(seg, "start", 0))
             end = float(getattr(seg, "end", 0))
             text = str(getattr(seg, "text", "")).strip()
             collected.append({"start": start, "end": end, "text": text})
-            emit({"type": "segment", "start": start, "end": end, "text": text})
+            emit({"type": "segment", "start": start, "end": end, "text": text, **ctx})
             now = time.time()
             if now - last_progress["t"] >= 0.15:
                 last_progress["t"] = now
@@ -416,25 +440,122 @@ def transcribe(config: dict) -> None:
                         "total": total,
                         "elapsed": round(now - t0, 2),
                         "percent": percent,
+                        **ctx,
                     }
                 )
     except Exception as exc:  # noqa: BLE001
-        emit({"type": "error", "code": "transcribe_iter", "message": str(exc)})
-        return
+        emit({"type": fail_type, "code": "transcribe_iter", "message": str(exc), "audio": audio, **ctx})
+        return None
 
     count = write_subtitle(collected, output, fmt)
-    elapsed = round(time.time() - t0, 2)
+    return {"output": output, "count": count, "elapsed": round(time.time() - t0, 2)}
+
+
+def transcribe(config: dict) -> None:
+    fmt = str(config.get("format") or "vtt").lower()
+    if fmt not in ("vtt", "srt"):
+        emit({"type": "error", "code": "bad_format", "message": "format 仅支持 vtt / srt"})
+        return
+
+    batch = isinstance(config.get("audios"), list) and bool(config.get("audios"))
+    jobs = build_jobs(config, fmt)
+    if not jobs or not any(j["audio"] for j in jobs):
+        emit({"type": "error", "code": "bad_audio", "message": "没有要转写的音频文件"})
+        return
+
+    model, device, compute_type = load_whisper(config)
+    if model is None:
+        return
+
     emit(
         {
-            "type": "done",
-            "output": output,
-            "format": fmt,
-            "count": count,
-            "elapsed": elapsed,
-            "device": device,
-            "compute_type": compute_type,
+            "type": "status",
+            "message": "模型已加载, 开始转写",
+            "detail": f"{len(jobs)} 个文件" if batch else jobs[0]["audio"],
         }
     )
+    if batch:
+        emit({"type": "batch", "total": len(jobs)})
+
+    skip_existing = bool(config.get("skip_existing"))
+    t_all = time.time()
+    ok = failed = skipped = 0
+    outputs: list[str] = []
+    results: list[dict] = []
+
+    for i, job in enumerate(jobs):
+        audio = job["audio"]
+        output = job["output"]
+        name = os.path.basename(audio) if audio else ""
+        if not audio or not os.path.exists(audio):
+            failed += 1
+            emit({"type": "file_error", "index": i, "total": len(jobs), "audio": audio, "name": name, "message": "音频文件不存在"})
+            continue
+        skip = skip_existing and os.path.exists(output)
+        if batch:
+            emit({"type": "file", "index": i, "total": len(jobs), "audio": audio, "name": name, "skipped": skip})
+        if skip:
+            skipped += 1
+            if batch:
+                emit({"type": "file_done", "index": i, "output": output, "count": 0, "skipped": True, "elapsed": 0})
+            continue
+        res = transcribe_file(
+            model,
+            audio,
+            config,
+            output,
+            fmt,
+            index=(i if batch else None),
+            total_files=(len(jobs) if batch else None),
+        )
+        if res is None:
+            failed += 1
+            continue
+        ok += 1
+        outputs.append(res["output"])
+        results.append(res)
+        if batch:
+            emit(
+                {
+                    "type": "file_done",
+                    "index": i,
+                    "output": res["output"],
+                    "count": res["count"],
+                    "elapsed": res["elapsed"],
+                    "skipped": False,
+                }
+            )
+
+    elapsed = round(time.time() - t_all, 2)
+    if batch:
+        emit(
+            {
+                "type": "done",
+                "total": len(jobs),
+                "ok": ok,
+                "failed": failed,
+                "skipped": skipped,
+                "outputs": outputs,
+                "format": fmt,
+                "elapsed": elapsed,
+                "device": device,
+                "compute_type": compute_type,
+            }
+        )
+    elif results:
+        # 单文件: 保持与旧版一致的字段
+        last = results[-1]
+        emit(
+            {
+                "type": "done",
+                "output": last["output"],
+                "format": fmt,
+                "count": last["count"],
+                "elapsed": last["elapsed"],
+                "device": device,
+                "compute_type": compute_type,
+            }
+        )
 
 
 def main() -> int:
