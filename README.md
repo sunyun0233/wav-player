@@ -1,8 +1,8 @@
-# WAV 播放器（WAV Player）
+# ASMR 播放器
 
-**一个本地 WAV 播放器：同步 VTT 字幕，并支持日文 → 中文转写。**
+**一个本地ASMR 播放器：同步 VTT 字幕，并支持日文 → 中文转写。**
 
-`WAV Player` 是一个基于 Electron 的桌面播放器，用于播放本地 `.wav` 音频、同步显示 `.vtt` 字幕，并可将日语 ASMR 音频在 **本地** 转写为中文字幕。
+`WAV Player` 是一个基于 Electron 的桌面播放器，用于播放本地 ASMR 音频、同步显示 `.vtt` 字幕，并可将日语 ASMR 音频在 **本地** 转写为中文字幕。
 
 <p>
   <img alt="Electron" src="https://img.shields.io/badge/Electron-33-blue?logo=electron&logoColor=white" />
@@ -44,11 +44,11 @@
 
 ## 特性 / Features
 
-- **本地 WAV 播放**：Web Audio 解码生成真实波形峰值，点击 / 拖动波形可定位。
+- **本地播放**：Web Audio 解码生成真实波形峰值，点击 / 拖动波形可定位。
 - **同步字幕**：`.vtt` 解析（兼容常见内联标签与 SRT），与播放进度精确同步并自动滚动。
 - **文件夹播放列表**：递归扫描整个文件夹，自动生成列表（支持子目录），一键“全部播放”。
 - **自动关联字幕与封面（宽松匹配）**：
-  - 同名 `.vtt` / `.srt`、子目录（`subtitle/subtitles/subs/lyrics/…`）、大小写 / 分隔符不敏感匹配。
+  - 同名 `.vtt` / `.srt`、子目录（`subtitle/subtitles/subs/lyrics/…`）。
   - 支持把字幕追加到完整音频文件名（如 `01.xxx.wav` → `01.xxx.wav.vtt`）。
   - 封面：同名图片、`cover/folder/front/album/…` 通用名、封面子目录，整专辑回退到封面。
 - **自定义封面**：点击封面卡片更换、点 ✕ 移除，按音频记住；封面同时作为舞台掩幕背景。
@@ -80,7 +80,7 @@
 
 - **Node.js 18+** 与 npm。
 - **Python 3.11**（推荐；转写需要）。其他 3.10 / 3.12 也可，需自行确认轮子可用。
-- **（可选）NVIDIA 显卡 + CUDA** 用于 GPU 推理。RTX 30 系建议 `CUDA 11.8 / 12.x`。
+- **（可选）NVIDIA 显卡 + CUDA** 用于 GPU 推理。
 
 ## 快速开始 / Quick Start
 
@@ -97,7 +97,7 @@ npm start        # 本地运行 Electron
 
 ## 日文转中文字幕 / JP → ZH Transcription
 
-这是本项目最特别的功能：把日语音频在 **本地** 转写为中文字幕，无需云端。
+这是本项目最特别的功能：把日语音频在 **本地** 转写为中文字幕。
 
 ### 1. 安装 Python 依赖
 
