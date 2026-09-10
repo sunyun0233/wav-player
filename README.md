@@ -75,7 +75,7 @@
 
 - **Node.js 18+** 与 npm。
 - **Python 3.11**（推荐；转写需要）。其他 3.10 / 3.12 也可，需自行确认轮子可用。
-- **（可选）NVIDIA 显卡 + CUDA** 用于 GPU 推理。RTX 30 系建议 `CUDA 11.8 / 12.x`。
+- **（可选）NVIDIA 显卡 + CUDA** 用于 GPU 推理。
 
 ## 快速开始 / Quick Start
 
