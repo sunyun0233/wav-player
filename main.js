@@ -246,6 +246,15 @@ ipcMain.handle('dialog:openFolder', async () => {
   return result.filePaths[0];
 });
 
+ipcMain.handle('dialog:openFolders', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '批量导入专辑文件夹',
+    properties: ['openDirectory', 'multiSelections'],
+  });
+  if (result.canceled || !result.filePaths.length) return [];
+  return result.filePaths;
+});
+
 ipcMain.handle('media:registerPath', async (_event, filePath) => {
   if (typeof filePath === 'string' && filePath) {
     allowedPaths.add(filePath);
@@ -370,6 +379,44 @@ ipcMain.handle('library:scan', async (_event, folderPath) => {
     folderCoverUrl: folderCover ? mediaUrl(folderCover) : '',
     tracks,
   };
+});
+
+// 只返回专辑摘要 (不含曲目列表), 用于批量导入
+ipcMain.handle('library:scanSummary', async (_event, folderPath) => {
+  if (typeof folderPath !== 'string' || !folderPath || !fs.existsSync(folderPath)) return null;
+  const override = folderCoverOverride(folderPath);
+  let tracks = [];
+  try {
+    tracks = library.buildLibrary(folderPath, { folderCover: override });
+  } catch (_error) {
+    return null;
+  }
+  let cover = override || library.findFolderCover(folderPath) || '';
+  if (!cover) {
+    const withCover = tracks.find((t) => t.coverPath);
+    if (withCover) cover = withCover.coverPath;
+  }
+  if (cover) allowedPaths.add(cover);
+  return {
+    folderPath,
+    name: path.basename(folderPath) || folderPath,
+    coverPath: cover,
+    coverUrl: cover ? mediaUrl(cover) : '',
+    trackCount: tracks.length,
+  };
+});
+
+ipcMain.handle('library:subfolders', async (_event, folderPath) => {
+  if (typeof folderPath !== 'string' || !folderPath || !fs.existsSync(folderPath)) return [];
+  try {
+    return fs
+      .readdirSync(folderPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(folderPath, entry.name))
+      .slice(0, 400);
+  } catch (_error) {
+    return [];
+  }
 });
 
 ipcMain.handle('subtitle:find', async (_event, audioPath) => {

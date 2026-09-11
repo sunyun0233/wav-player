@@ -1807,7 +1807,7 @@ input[type="range"]::-webkit-slider-thumb {
 .album-preview-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: .6rem;
   padding: .55rem .7rem;
   border-top: 1px solid var(--rule-soft);

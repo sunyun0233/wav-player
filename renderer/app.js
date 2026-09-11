@@ -14,7 +14,10 @@
     openSubtitle: async () => null,
     openCover: async () => null,
     openFolder: async () => null,
+    openFolders: async () => [],
     scanFolder: async () => null,
+    scanFolderSummary: async () => null,
+    listSubfolders: async () => [],
     findSubtitle: async () => null,
     registerPath: async () => null,
     findCover: async () => null,
@@ -826,9 +829,6 @@
 
     const foot = document.createElement('div');
     foot.className = 'album-preview-foot';
-    const note = document.createElement('span');
-    note.className = 'album-preview-note';
-    note.textContent = '预览不会打断当前播放';
     const loadBtn = document.createElement('button');
     loadBtn.className = 'action action-primary album-preview-load';
     loadBtn.type = 'button';
@@ -837,7 +837,6 @@
       e.stopPropagation();
       loadAlbum(pv.path);
     });
-    foot.appendChild(note);
     foot.appendChild(loadBtn);
 
     box.appendChild(head);
@@ -913,7 +912,7 @@
     album.trackCount = lib.tracks.length;
     saveAlbums();
     renderAlbums();
-    setStatus(`预览 · ${lib.name}（${lib.tracks.length} 首）· 未打断播放`, 'ok');
+    setStatus(`预览 · ${lib.name}（${lib.tracks.length} 首）`, 'ok');
   }
 
   // 显式载入专辑 (唯一会切换当前播放的专辑操作)
@@ -929,25 +928,50 @@
     }
   }
 
-  // 添加专辑: 只登记到专辑库, 不打断当前播放
+  // 批量导入专辑文件夹: 只登记到专辑库
   async function addAlbum() {
-    const folderPath = await api.openFolder();
-    if (!folderPath) return;
-    const lib = await api.scanFolder(folderPath);
-    if (!lib || !lib.tracks.length) {
-      setStatus('该文件夹没有可播放的音频', 'warn');
+    const folders = await api.openFolders();
+    if (!folders || !folders.length) return;
+    setStatus(`正在导入 ${folders.length} 个文件夹…`, 'ok');
+
+    const targets = [];
+    const seen = new Set();
+    const push = (s) => {
+      if (!s || !s.trackCount || seen.has(s.folderPath)) return;
+      seen.add(s.folderPath);
+      targets.push(s);
+    };
+
+    for (const folder of folders) {
+      const summary = await api.scanFolderSummary(folder);
+      if (summary && summary.trackCount) {
+        push(summary);
+        continue;
+      }
+      // 该文件夹本身不含音频 → 把它的直接子文件夹逐个当作专辑导入
+      const subs = await api.listSubfolders(folder);
+      for (const sub of subs) {
+        if (targets.length >= 300) break;
+        push(await api.scanFolderSummary(sub));
+      }
+    }
+
+    if (!targets.length) {
+      setStatus('这些文件夹里没有找到音频', 'warn');
       return;
     }
-    upsertAlbum({
-      path: lib.folderPath,
-      name: lib.name,
-      coverPath: lib.folderCover || '',
-      coverUrl: lib.folderCoverUrl || '',
-      trackCount: lib.tracks.length,
-      touch: true,
-    });
+    targets.forEach((s) =>
+      upsertAlbum({
+        path: s.folderPath,
+        name: s.name,
+        coverPath: s.coverPath || '',
+        coverUrl: s.coverUrl || '',
+        trackCount: s.trackCount,
+        touch: true,
+      })
+    );
     renderAlbums();
-    setStatus(`已添加专辑 · ${lib.name}（未打断播放）`, 'ok');
+    setStatus(`已导入 ${targets.length} 张专辑`, 'ok');
   }
 
   async function chooseAlbumCover(album) {
@@ -2427,6 +2451,7 @@
         previewByPath: (p) => previewAlbum({ path: p }),
         previewState: () => state.albumPreview,
         load: loadAlbum,
+        importAlbums: addAlbum,
         setCover: async (folderPath, coverPath) => {
           await api.setFolderCover(folderPath, coverPath);
           const a = state.albums.find((x) => x.path === folderPath);

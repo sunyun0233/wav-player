@@ -52,6 +52,34 @@ ipcMain.handle('cover:folderCover', async (_e, folderPath) => {
 });
 
 ipcMain.handle('dialog:openFolder', async () => null);
+ipcMain.handle('dialog:openFolders', async () => [
+  path.resolve(__dirname, '..', 'samples', 'album'),
+  path.resolve(__dirname, '..', 'samples', 'zh'),
+]);
+ipcMain.handle('library:scanSummary', async (_e, folderPath) => {
+  if (!folderPath || !fs.existsSync(folderPath)) return null;
+  const tracks = library.buildLibrary(folderPath);
+  const cover = library.findFolderCover(folderPath) || '';
+  if (cover) allowedPaths.add(cover);
+  return {
+    folderPath,
+    name: path.basename(folderPath),
+    coverPath: cover,
+    coverUrl: cover ? mediaUrl(cover) : '',
+    trackCount: tracks.length,
+  };
+});
+ipcMain.handle('library:subfolders', async (_e, folderPath) => {
+  if (!folderPath || !fs.existsSync(folderPath)) return [];
+  try {
+    return fs
+      .readdirSync(folderPath, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(folderPath, e.name));
+  } catch (_e2) {
+    return [];
+  }
+});
 ipcMain.handle('library:scan', async (_e, folderPath) => {
   if (!folderPath || !fs.existsSync(folderPath)) return null;
   const raw = library.buildLibrary(folderPath);
@@ -309,6 +337,24 @@ app.whenReady().then(async () => {
     console.error('album preview error:', error);
   }
   await shot('qa-album-preview.png');
+
+  // batch import (multi-select, mocked to two folders)
+  try {
+    const res = await js(
+      `(async () => {
+        const before = window.__qa.albums.list().length;
+        await window.__qa.albums.importAlbums();
+        await new Promise((r) => setTimeout(r, 900));
+        window.__qa.setView('albums');
+        return { before, after: window.__qa.albums.list().length, names: window.__qa.albums.list().map((a) => a.name) };
+      })()`
+    );
+    console.log('album-batch-import', JSON.stringify(res));
+    await new Promise((r) => setTimeout(r, 700));
+  } catch (error) {
+    console.error('batch import error:', error);
+  }
+  await shot('qa-album-import.png');
 
   // batch transcribe over the folder, simulated
   try {
