@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
     <title>WAV 播放器</title>
-    <link rel="stylesheet" href="styles.css?v=5" />
-    <script src="vtt.js?v=5" defer></script>
-    <script src="app.js?v=5" defer></script>
+    <link rel="stylesheet" href="styles.css?v=6" />
+    <script src="vtt.js?v=6" defer></script>
+    <script src="app.js?v=6" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#stage-main">跳转到主体</a>
@@ -126,7 +126,14 @@
             </div>
 
             <div class="subtitle" id="subtitleZone">
-              <p class="subtitle-line" id="subtitleLine" aria-live="polite">字幕将在此同步显示</p>
+              <div class="sub-roll" id="subtitleRoll">
+                <p class="sub-roll-line is-prev is-empty" id="subLinePrev" aria-hidden="true"></p>
+                <p class="sub-roll-line is-cur" id="subtitleLine" aria-live="polite">字幕将在此同步显示</p>
+                <p class="sub-roll-line is-next is-empty" id="subLineNext" aria-hidden="true"></p>
+              </div>
+              <div class="sub-progress" id="subProgressTrack" aria-hidden="true" hidden>
+                <span id="subProgress"></span>
+              </div>
             </div>
 
             <div class="timeline">
@@ -197,9 +204,21 @@
             <header class="panel-head">
               <span class="panel-code">INDEX / 字幕</span>
               <strong>轨迹</strong>
+              <button
+                class="panel-action is-on"
+                type="button"
+                id="autoScrollBtn"
+                aria-pressed="true"
+                title="字幕自动滚动"
+              >
+                ⟳ 自动
+              </button>
             </header>
-            <div class="transcript-list" id="transcriptList" role="list">
-              <p class="transcript-empty" id="transcriptEmpty">尚未加载字幕</p>
+            <div class="transcript-wrap">
+              <div class="transcript-list" id="transcriptList" role="list">
+                <p class="transcript-empty" id="transcriptEmpty">尚未加载字幕</p>
+              </div>
+              <button class="scroll-return" type="button" id="scrollReturn" hidden>⟲ 回到当前</button>
             </div>
           </section>
 

@@ -284,6 +284,32 @@ app.whenReady().then(async () => {
   }
   await shot('qa-albums.png');
 
+  // album preview must NOT interrupt current playback
+  try {
+    const res = await js(
+      `(async () => {
+        await window.__qa.loadFolderPath(${JSON.stringify(albumPath)});
+        await new Promise((r) => setTimeout(r, 1300));
+        window.__qa.playTrack(1);
+        await new Promise((r) => setTimeout(r, 800));
+        window.__qa.state.audio.play().catch(() => {});
+        await new Promise((r) => setTimeout(r, 500));
+        const before = { path: window.__qa.state.audioPath, paused: window.__qa.state.audio.paused, t: Number((window.__qa.state.audio.currentTime||0).toFixed(2)) };
+        const other = window.__qa.albums.list().find((a) => a.name === 'samples') || window.__qa.albums.list()[0];
+        await window.__qa.albums.preview(other);
+        await new Promise((r) => setTimeout(r, 1100));
+        const after = { path: window.__qa.state.audioPath, paused: window.__qa.state.audio.paused, t: Number((window.__qa.state.audio.currentTime||0).toFixed(2)), preview: !!window.__qa.albums.previewState() };
+        window.__qa.setView('albums');
+        return { before, after };
+      })()`
+    );
+    console.log('album-preview-no-interrupt', JSON.stringify(res));
+    await new Promise((r) => setTimeout(r, 700));
+  } catch (error) {
+    console.error('album preview error:', error);
+  }
+  await shot('qa-album-preview.png');
+
   // batch transcribe over the folder, simulated
   try {
     await js(

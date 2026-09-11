@@ -63,6 +63,7 @@
     folderPath: '',
     pendingResume: 0,
     albums: [],
+    albumPreview: null,
     transcribe: {
       jobId: null,
       running: false,
@@ -98,6 +99,13 @@
     abA: $('#abA'),
     abB: $('#abB'),
     subtitleLine: $('#subtitleLine'),
+    subLinePrev: $('#subLinePrev'),
+    subLineNext: $('#subLineNext'),
+    subtitleRoll: $('#subtitleRoll'),
+    subProgressTrack: $('#subProgressTrack'),
+    subProgress: $('#subProgress'),
+    autoScrollBtn: $('#autoScrollBtn'),
+    scrollReturn: $('#scrollReturn'),
     timeCurrent: $('#timeCurrent'),
     timeTotal: $('#timeTotal'),
     seekBar: $('#seekBar'),
@@ -226,6 +234,7 @@
     albums: 'wavplayer.albums',
     transcribe: 'wavplayer.transcribe',
     archiveW: 'wavplayer.archiveWidth',
+    autoScroll: 'wavplayer.autoScroll',
   };
 
   function loadJSON(key, fallback) {
@@ -701,12 +710,13 @@
 
   function renderAlbums() {
     const list = el.albumList;
-    list.querySelectorAll('.album-card').forEach((n) => n.remove());
+    list.querySelectorAll('.album-card, .album-preview').forEach((n) => n.remove());
     if (!state.albums.length) {
       el.albumEmpty.style.display = '';
       return;
     }
     el.albumEmpty.style.display = 'none';
+    let previewRendered = false;
     state.albums
       .slice()
       .sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0))
@@ -761,16 +771,79 @@
         card.appendChild(cover);
         card.appendChild(info);
         card.appendChild(btns);
-        card.addEventListener('click', () => openAlbum(album));
+        card.addEventListener('click', () => previewAlbum(album));
         card.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            openAlbum(album);
+            previewAlbum(album);
           }
         });
         list.appendChild(card);
+        if (state.albumPreview && state.albumPreview.path === album.path) {
+          list.appendChild(buildAlbumPreview());
+          previewRendered = true;
+        }
       });
+    if (state.albumPreview && !previewRendered) list.appendChild(buildAlbumPreview());
     resolveAlbumCovers();
+  }
+
+  // 预览区块 (只读, 不改变当前播放)
+  function buildAlbumPreview() {
+    const pv = state.albumPreview;
+    const box = document.createElement('div');
+    box.className = 'album-preview';
+    box.setAttribute('data-album-preview', pv.path);
+
+    const head = document.createElement('div');
+    head.className = 'album-preview-head';
+    const code = document.createElement('span');
+    code.className = 'panel-code';
+    code.textContent = 'PREVIEW / 预览';
+    const count = document.createElement('span');
+    count.className = 'album-preview-count';
+    count.textContent = `${pv.tracks.length} 首`;
+    head.appendChild(code);
+    head.appendChild(count);
+
+    const listBox = document.createElement('div');
+    listBox.className = 'album-preview-list';
+    listBox.setAttribute('role', 'list');
+    pv.tracks.forEach((track, i) => {
+      const row = document.createElement('div');
+      row.className = 'album-preview-item';
+      row.setAttribute('role', 'listitem');
+      const idx = document.createElement('span');
+      idx.className = 'album-preview-idx';
+      idx.textContent = String(i + 1).padStart(2, '0');
+      const nm = document.createElement('span');
+      nm.className = 'album-preview-name';
+      nm.textContent = track.name;
+      row.appendChild(idx);
+      row.appendChild(nm);
+      listBox.appendChild(row);
+    });
+
+    const foot = document.createElement('div');
+    foot.className = 'album-preview-foot';
+    const note = document.createElement('span');
+    note.className = 'album-preview-note';
+    note.textContent = '预览不会打断当前播放';
+    const loadBtn = document.createElement('button');
+    loadBtn.className = 'action action-primary album-preview-load';
+    loadBtn.type = 'button';
+    loadBtn.textContent = '载入并播放';
+    loadBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      loadAlbum(pv.path);
+    });
+    foot.appendChild(note);
+    foot.appendChild(loadBtn);
+
+    box.appendChild(head);
+    box.appendChild(listBox);
+    box.appendChild(foot);
+    return box;
   }
 
   let albumCoverRunning = false;
@@ -806,15 +879,75 @@
     }
   }
 
-  async function openAlbum(album) {
-    if (!album || !album.path) return;
-    await openFolderPath(album.path, { autoplay: false });
+  function isInFolder(filePath, folderPath) {
+    if (!filePath || !folderPath) return false;
+    const f = String(filePath).replace(/\\/g, '/');
+    const d = String(folderPath).replace(/\\/g, '/').replace(/\/+$/, '');
+    return f === d || f.startsWith(d + '/');
   }
 
+  // 预览专辑: 只读取内容, 绝不改变当前播放
+  async function previewAlbum(album) {
+    if (!album || !album.path) return;
+    if (state.albumPreview && state.albumPreview.path === album.path) {
+      state.albumPreview = null; // 再次点击收起
+      renderAlbums();
+      return;
+    }
+    setStatus('正在读取专辑…', 'ok');
+    const lib = await api.scanFolder(album.path);
+    if (!lib || !lib.tracks.length) {
+      setStatus('无法读取该专辑', 'warn');
+      return;
+    }
+    state.albumPreview = {
+      path: album.path,
+      name: lib.name,
+      tracks: lib.tracks,
+      coverUrl: lib.folderCoverUrl || album.coverUrl || '',
+    };
+    if (lib.folderCoverUrl) {
+      album.coverUrl = lib.folderCoverUrl;
+      album.coverPath = lib.folderCover || '';
+    }
+    album.trackCount = lib.tracks.length;
+    saveAlbums();
+    renderAlbums();
+    setStatus(`预览 · ${lib.name}（${lib.tracks.length} 首）· 未打断播放`, 'ok');
+  }
+
+  // 显式载入专辑 (唯一会切换当前播放的专辑操作)
+  async function loadAlbum(pathOrAlbum) {
+    const albumPath =
+      typeof pathOrAlbum === 'string' ? pathOrAlbum : pathOrAlbum && pathOrAlbum.path;
+    if (!albumPath) return;
+    state.albumPreview = null;
+    const ok = await openFolderPath(albumPath, { autoplay: true });
+    if (ok) {
+      setView('list');
+      setStatus('已载入专辑并开始播放', 'ok');
+    }
+  }
+
+  // 添加专辑: 只登记到专辑库, 不打断当前播放
   async function addAlbum() {
     const folderPath = await api.openFolder();
     if (!folderPath) return;
-    await openFolderPath(folderPath, { autoplay: false });
+    const lib = await api.scanFolder(folderPath);
+    if (!lib || !lib.tracks.length) {
+      setStatus('该文件夹没有可播放的音频', 'warn');
+      return;
+    }
+    upsertAlbum({
+      path: lib.folderPath,
+      name: lib.name,
+      coverPath: lib.folderCover || '',
+      coverUrl: lib.folderCoverUrl || '',
+      trackCount: lib.tracks.length,
+      touch: true,
+    });
+    renderAlbums();
+    setStatus(`已添加专辑 · ${lib.name}（未打断播放）`, 'ok');
   }
 
   async function chooseAlbumCover(album) {
@@ -827,10 +960,13 @@
     saveAlbums();
     renderAlbums();
     setStatus('已设置专辑封面', 'ok');
-    // 若正是当前专辑, 重新扫描以套用封面
-    if (album.path === state.folderPath) {
-      await openFolderPath(album.path, { autoplay: false, index: state.currentIndex });
-      setView('albums');
+    // 正在播放该专辑且用的是专辑/自动封面时, 原地刷新 (不重新加载音频)
+    if (
+      isInFolder(state.audioPath, album.path) &&
+      ['folder', 'auto', 'embedded', 'none'].includes(state.cover.kind)
+    ) {
+      state.cover = { url: res.url, path: res.path, kind: 'folder' };
+      updateCoverUI();
     }
   }
 
@@ -877,8 +1013,7 @@
     applyTrackCover(track);
     el.trackTitle.textContent = name;
     el.trackMeta.textContent = '正在解析…';
-    el.subtitleLine.textContent = '字幕将在此同步显示';
-    el.subtitleLine.classList.add('is-empty');
+    setSubtitlePlaceholder('字幕将在此同步显示');
     resetTranscript();
     setStatus('载入中', 'ok');
     setBusy(true);
@@ -1053,8 +1188,7 @@
     state.cues = cues;
     state.activeIndex = -1;
     renderTranscript();
-    el.subtitleLine.textContent = '字幕已载入，播放时同步显示';
-    el.subtitleLine.classList.add('is-empty');
+    setSubtitlePlaceholder('字幕已载入，播放时同步显示');
     setStatus(`字幕已载入 · ${cues.length} 条`, 'ok');
     updateRecord();
   }
@@ -1304,27 +1438,122 @@
     return -1;
   }
 
+  function setSubtitlePlaceholder(text) {
+    el.subLinePrev.innerHTML = '';
+    el.subLineNext.innerHTML = '';
+    el.subLinePrev.classList.add('is-empty');
+    el.subLineNext.classList.add('is-empty');
+    el.subtitleLine.classList.add('is-empty');
+    el.subtitleLine.textContent = text || '';
+    el.subProgressTrack.hidden = true;
+    el.subProgress.style.width = '0%';
+  }
+
   function updateSubtitle() {
+    const cues = state.cues;
+    const i = state.activeIndex;
+    const cue = cues[i];
+    if (!cue) {
+      setSubtitlePlaceholder(cues.length ? '——' : '字幕将在此同步显示');
+      return;
+    }
+    const prev = cues[i - 1];
+    const next = cues[i + 1];
+    el.subLinePrev.innerHTML = prev ? prev.html : '';
+    el.subLineNext.innerHTML = next ? next.html : '';
+    el.subLinePrev.classList.toggle('is-empty', !prev);
+    el.subLineNext.classList.toggle('is-empty', !next);
+    el.subtitleLine.classList.remove('is-empty');
+    el.subtitleLine.innerHTML = cue.html;
+    el.subProgressTrack.hidden = false;
+    updateSubtitleProgress(state.audio.currentTime);
+    if (!reduceMotion) {
+      el.subtitleRoll.classList.remove('is-rolling');
+      void el.subtitleRoll.offsetWidth; // 重启动画
+      el.subtitleRoll.classList.add('is-rolling');
+    }
+  }
+
+  function updateSubtitleProgress(time) {
     const cue = state.cues[state.activeIndex];
-    if (cue) {
-      el.subtitleLine.innerHTML = cue.html;
-      el.subtitleLine.classList.remove('is-empty');
-    } else {
-      el.subtitleLine.textContent = state.cues.length ? '——' : '字幕将在此同步显示';
-      el.subtitleLine.classList.add('is-empty');
+    if (!cue) {
+      el.subProgress.style.width = '0%';
+      return;
+    }
+    const span = Math.max(0.001, cue.end - cue.start);
+    const ratio = clamp((time - cue.start) / span, 0, 1);
+    el.subProgress.style.width = (ratio * 100).toFixed(1) + '%';
+  }
+
+  let lastSubProgTick = 0;
+
+  function maybeUpdateSubtitleProgress(time) {
+    const now = performance.now();
+    if (now - lastSubProgTick < 100) return;
+    lastSubProgTick = now;
+    updateSubtitleProgress(time);
+  }
+
+  // ---------- transcript auto scroll (方案 A) ----------
+  const scrollState = { auto: true, user: false, timer: 0 };
+
+  function scrollActiveCue(behavior) {
+    if (!scrollState.auto || scrollState.user) return;
+    const item = el.transcriptList.querySelector('.cue-item.is-active');
+    if (!item) return;
+    const container = el.transcriptList;
+    const cRect = container.getBoundingClientRect();
+    const iRect = item.getBoundingClientRect();
+    const delta = iRect.top + iRect.height / 2 - (cRect.top + cRect.height / 2);
+    const top = Math.max(0, container.scrollTop + delta);
+    container.scrollTo({ top, behavior: behavior || (reduceMotion ? 'auto' : 'smooth') });
+  }
+
+  function markUserScroll() {
+    if (!scrollState.auto) return;
+    scrollState.user = true;
+    el.scrollReturn.hidden = false;
+    if (scrollState.timer) clearTimeout(scrollState.timer);
+    scrollState.timer = setTimeout(() => {
+      scrollState.user = false;
+      el.scrollReturn.hidden = true;
+      scrollActiveCue();
+    }, 4500);
+  }
+
+  function returnToActiveCue() {
+    if (scrollState.timer) clearTimeout(scrollState.timer);
+    scrollState.user = false;
+    el.scrollReturn.hidden = true;
+    scrollActiveCue();
+  }
+
+  function setAutoScroll(on) {
+    scrollState.auto = !!on;
+    el.autoScrollBtn.classList.toggle('is-on', scrollState.auto);
+    el.autoScrollBtn.setAttribute('aria-pressed', scrollState.auto ? 'true' : 'false');
+    saveJSON(STORE.autoScroll, scrollState.auto);
+    if (scrollState.auto) {
+      scrollState.user = false;
+      el.scrollReturn.hidden = true;
+      scrollActiveCue();
     }
   }
 
   function updateTranscriptActive() {
-    const items = el.transcriptList.querySelectorAll('.cue-item');
-    items.forEach((item, index) => {
-      const active = index === state.activeIndex;
-      item.classList.toggle('is-active', active);
-      if (active && state.isPlaying) {
-        item.scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
-      }
+    el.transcriptList.querySelectorAll('.cue-item').forEach((item, index) => {
+      item.classList.toggle('is-active', index === state.activeIndex);
     });
+    scrollActiveCue();
   }
+
+  el.autoScrollBtn.addEventListener('click', () => setAutoScroll(!scrollState.auto));
+  el.scrollReturn.addEventListener('click', returnToActiveCue);
+  el.transcriptList.addEventListener('wheel', markUserScroll, { passive: true });
+  el.transcriptList.addEventListener('touchmove', markUserScroll, { passive: true });
+  el.transcriptList.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest || !e.target.closest('.cue-item')) markUserScroll();
+  });
 
   function setProgress(time) {
     const dur = currentDuration();
@@ -1357,6 +1586,7 @@
         updateSubtitle();
         updateTranscriptActive();
       }
+      if (state.activeIndex >= 0) maybeUpdateSubtitleProgress(t);
       if (state.ab.on && state.ab.b !== null && !audio.paused && t >= state.ab.b) {
         audio.currentTime = state.ab.a || 0;
       }
@@ -2159,6 +2389,7 @@
   updateAbUI();
   setView('list');
   renderAlbums();
+  setAutoScroll(loadJSON(STORE.autoScroll, true));
   requestAnimationFrame(frame);
   restoreSession();
 
@@ -2186,6 +2417,10 @@
         render: renderAlbums,
         list: () => state.albums,
         openPath: (p) => openFolderPath(p, { autoplay: false }),
+        preview: (album) => previewAlbum(album),
+        previewByPath: (p) => previewAlbum({ path: p }),
+        previewState: () => state.albumPreview,
+        load: loadAlbum,
         setCover: async (folderPath, coverPath) => {
           await api.setFolderCover(folderPath, coverPath);
           const a = state.albums.find((x) => x.path === folderPath);
