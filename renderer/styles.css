@@ -724,9 +724,10 @@ button:focus-visible {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 1px;
+  padding: 0;
   background: var(--signal);
-  box-shadow: 0 0 .8rem rgb(0 251 236 / .8);
+  box-shadow: 0 0 3px rgb(0 251 236 / .6);
   transform: translateX(-50%);
   pointer-events: none;
 }
