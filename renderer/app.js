@@ -1419,6 +1419,8 @@
   // ---------- progress / cue sync ----------
   const waveClipRect = () => document.getElementById('waveClipRect');
 
+  // 常驻字幕: 返回最后一条"已开始"的字幕。句间静音时保留上一句, 直到下一句出现;
+  // 只有尚未到第一条时才返回 -1。
   function findCueIndex(time) {
     const cues = state.cues;
     if (!cues.length) return -1;
@@ -1434,8 +1436,7 @@
         hi = m - 1;
       }
     }
-    if (res >= 0 && time < cues[res].end) return res;
-    return -1;
+    return res;
   }
 
   function setSubtitlePlaceholder(text) {
@@ -1465,7 +1466,8 @@
     el.subLineNext.classList.toggle('is-empty', !next);
     el.subtitleLine.classList.remove('is-empty');
     el.subtitleLine.innerHTML = cue.html;
-    el.subProgressTrack.hidden = false;
+    // 该句已结束(句间空隙)时保留文字, 但收起进度条
+    el.subProgressTrack.hidden = state.audio.currentTime >= cue.end;
     updateSubtitleProgress(state.audio.currentTime);
     if (!reduceMotion) {
       el.subtitleRoll.classList.remove('is-rolling');
@@ -1491,7 +1493,11 @@
     const now = performance.now();
     if (now - lastSubProgTick < 100) return;
     lastSubProgTick = now;
-    updateSubtitleProgress(time);
+    const cue = state.cues[state.activeIndex];
+    if (!cue) return;
+    const ended = time >= cue.end;
+    if (el.subProgressTrack.hidden !== ended) el.subProgressTrack.hidden = ended;
+    if (!ended) updateSubtitleProgress(time);
   }
 
   // ---------- transcript auto scroll (方案 A) ----------
