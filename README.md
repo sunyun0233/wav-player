@@ -2,7 +2,7 @@
 
 **一个本地ASMR 播放器：同步 VTT 字幕，并支持日文 → 中文转写。**
 
-按：`WAV Player` 者，乃基于 Electron 之桌面播放器，所以播放本地 ASMR 音频、同步显示 `.vtt` 字幕，且能于本地将日语 ASMR 音频转写为中文字幕者也。
+`WAV Player` 者，乃基于 Electron 之桌面播放器，所以播放本地 ASMR 音频、同步显示 `.vtt` 字幕，且能于本地将日语 ASMR 音频转写为中文字幕者也。
 
 <p>
   <img alt="Electron" src="https://img.shields.io/badge/Electron-33-blue?logo=electron&logoColor=white" />
@@ -193,4 +193,4 @@ npm run pack:portable # (可选) 便携版
 
 依 [MIT](./LICENSE) 许可。
 
-呜呼，此文 尽于此。诸君若觉可用，便取去；若觉不足，自行 fork 可也。
+呜呼，此文尽于此。诸君若觉可用，便取去；若觉不足，自行 fork 可也。
